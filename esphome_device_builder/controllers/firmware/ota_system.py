@@ -19,7 +19,7 @@ from ...helpers.device_yaml._tolerant_yaml import load_yaml_tolerant
 from ...helpers.json import JSONDecodeError, dumps, loads
 from ...helpers.storage_path import resolve_storage_path
 from ...helpers.subprocess import run_subprocess_capture
-from ...models import OTA_PORT, FirmwareJob, JobType
+from ...models import FirmwareJob, JobType
 from ..devices import encryption_key_lookup
 from . import factories
 from .helpers import _ingest_output_line
@@ -33,7 +33,6 @@ _CONF_OTA = "ota"
 _CONF_OTA_SYSTEM = "ota_system"
 _CONF_METHOD = "method"
 _CONF_MIGRATE_VIA_OTA = "migrate_via_ota"
-_METHOD_SERIAL_THEN_OTA = "serial_then_ota"
 _SYSTEM_FILENAME = "ota_system.yaml"
 _FACTORY_FILENAME = "firmware.factory.bin"
 _MERGED_FILENAME = "firmware.ota_system.factory.bin"
@@ -206,17 +205,12 @@ async def run_upload(
     if system is None:
         return await run(job.configuration, job.port)
     if get_port_type(job.port) is PortType.SERIAL:
-        if system.method == _METHOD_SERIAL_THEN_OTA:
-            return await _sequence(
-                partial(run, system.configuration, job.port),
-                partial(run, job.configuration, OTA_PORT),
-            )
         image = await run_in_executor(build_factory_image, job.configuration, system)
         _emit(controller, job, f"INFO Factory image with the OTA system: {image}")
         return await run(job.configuration, job.port, upload_file=str(image))
     outcome = await _reboot_to_system(controller, job)
     _emit(controller, job, f"INFO Reboot into the OTA system: {outcome}")
-    if outcome == "no_action" and system.migrate_via_ota:
+    if outcome == "no_action":
         for line in _MIGRATE_WARNINGS:
             _emit(controller, job, line)
         return await _sequence(
