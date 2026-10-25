@@ -28,6 +28,7 @@ from ...helpers.paths import resolve_under_root
 from ...helpers.sibling_cli import helper_cli_cmd
 from ...helpers.storage_path import resolve_storage_path
 from ...models.boards import normalize_platform
+from . import ota_system
 
 if TYPE_CHECKING:
     from .controller import FirmwareController
@@ -36,6 +37,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Generous: the child pays a full esphome import before answering.
 _HELPER_TIMEOUT_S = 60
+_FACTORY_FILE = "firmware.factory.bin"
 
 
 def _capabilities() -> PlatformCapabilities:
@@ -300,6 +302,10 @@ async def http_download(request: web.Request) -> web.StreamResponse:
     try:
         await db.firmware._validate_configuration_boundary(configuration)
         path, download_name = await run_in_executor(_resolve_artifact_path, configuration, file)
+        if file == _FACTORY_FILE and (
+            system := await ota_system.detect(db.firmware, configuration)
+        ):
+            path = await run_in_executor(ota_system.build_factory_image, configuration, system)
     except (CommandError, FileNotFoundError, ValueError) as err:
         # Collapse "not built" / "missing" / "traversal" to a bare 404 for the
         # caller, but log so an operator debugging a failed download has a

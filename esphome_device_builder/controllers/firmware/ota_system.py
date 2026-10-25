@@ -211,7 +211,7 @@ async def run_upload(
                 partial(run, system.configuration, job.port),
                 partial(run, job.configuration, OTA_PORT),
             )
-        image = await run_in_executor(build_factory_image, controller, job.configuration, system)
+        image = await run_in_executor(build_factory_image, job.configuration, system)
         _emit(controller, job, f"INFO Factory image with the OTA system: {image}")
         return await run(job.configuration, job.port, upload_file=str(image))
     outcome = await _reboot_to_system(controller, job)
@@ -227,9 +227,7 @@ async def run_upload(
     return await run(job.configuration, job.port)
 
 
-def build_factory_image(
-    controller: FirmwareController, configuration: str, system: OtaSystem
-) -> Path:
+def build_factory_image(configuration: str, system: OtaSystem) -> Path:
     main_bin = _firmware_bin(resolve_storage_path(configuration))
     system_bin = _firmware_bin(resolve_storage_path(system.configuration))
     factory = (system_bin.parent / _FACTORY_FILENAME).read_bytes()
