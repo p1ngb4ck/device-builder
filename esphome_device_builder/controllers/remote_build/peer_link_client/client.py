@@ -313,6 +313,7 @@ class PeerLinkClient:
         target_esphome_version: str = "",
         skip_bootloader: bool = False,
         ota_system: bool = False,
+        chip_revision: int | None = None,
     ) -> SubmitJobAckFrameData:
         return await _submit.submit_job(
             self,
@@ -325,6 +326,7 @@ class PeerLinkClient:
             target_esphome_version=target_esphome_version,
             skip_bootloader=skip_bootloader,
             ota_system=ota_system,
+            chip_revision=chip_revision,
         )
 
     async def cancel_job(self, *, job_id: str) -> bool:

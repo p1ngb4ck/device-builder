@@ -83,6 +83,7 @@ def create_job(
         remote_job_id=remote_job_id,
         device_name=device_name,
         device_friendly_name=device_friendly_name,
+        chip_revision=_stored_chip_revision(controller, configuration, job_type),
         target_esphome_version=target_esphome_version,
     )
     job.apply_build_source(build_source)
@@ -165,6 +166,7 @@ async def enqueue_install_chain(
         build_source=build_source,
         skip_bootloader=_is_ota_app_flash(port, flash_bootloader=flash_bootloader),
     )
+    mark_chip_probe(compile_job, port)
     upload_job = create_job(
         controller,
         configuration,
@@ -237,6 +239,20 @@ async def enqueue_install_or_defer(
         build_source=build_source,
         flash_bootloader=flash_bootloader,
     )
+
+
+def _stored_chip_revision(
+    controller: FirmwareController, configuration: str, job_type: JobType
+) -> int | None:
+    devices = controller._db.devices
+    if devices is None or job_type not in (JobType.COMPILE, JobType.INSTALL, JobType.UPLOAD):
+        return None
+    return devices.chip_revision(configuration)
+
+
+def mark_chip_probe(job: FirmwareJob, port: str) -> None:
+    if job.chip_revision is None and port.startswith("/dev"):
+        job.chip_probe_port = port
 
 
 async def enqueue_compile(

@@ -195,6 +195,8 @@ class FirmwareJob(DashboardModel):
     # COMPILE for an OTA app install: pass ``--skip-bootloader`` so the
     # bootloader and factory image are not built (esphome 2026.10+).
     skip_bootloader: bool = False
+    chip_revision: int | None = None
+    chip_probe_port: str = ""
     # In-memory decision input for the deferred-install completion hook;
     # the durable arm is ``Device.runtime_state.queued_update``.
     is_deferred_install: bool = False

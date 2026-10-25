@@ -160,6 +160,7 @@ async def extract_and_queue(
             target_esphome_version=pending.target_esphome_version,
             skip_bootloader=pending.skip_bootloader,
         )
+        job.chip_revision = pending.chip_revision
         if pending.ota_system:
             from ...firmware.ota_system import system_configuration
 

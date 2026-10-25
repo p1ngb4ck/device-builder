@@ -160,6 +160,12 @@ def _coerce_version_field(value: Any) -> str:
     return coerce_pep440_version(value, max_len=PAIRING_VERSION_MAX_LEN)
 
 
+def _coerce_chip_revision(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 9999:
+        return None
+    return value
+
+
 def _validate_configuration_filename(filename: str) -> str | None:
     r"""
     Return the device-name segment if *filename* is a safe leaf YAML, else ``None``.
@@ -218,6 +224,7 @@ class _PendingSubmit:
     # older offloaders that don't send the (NotRequired) key.
     skip_bootloader: bool = False
     ota_system: bool = False
+    chip_revision: int | None = None
 
 
 class SubmitJobReceiver:
@@ -374,6 +381,7 @@ class SubmitJobReceiver:
             # the full artifact set.
             skip_bootloader=frame.get("skip_bootloader") is True,
             ota_system=frame.get("ota_system") is True,
+            chip_revision=_coerce_chip_revision(frame.get("chip_revision")),
         )
 
     async def handle_submit_job_chunk(

@@ -151,6 +151,7 @@ async def enqueue_install_chain(
         skip_bootloader=factories._is_ota_app_flash(port, flash_bootloader=False),
         force_local=force_local,
     )
+    factories.mark_chip_probe(compile_job, port)
     upload = factories.create_job(
         controller, configuration, JobType.UPLOAD, port=port, depends_on=compile_job.job_id
     )

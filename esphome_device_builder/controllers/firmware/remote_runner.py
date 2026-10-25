@@ -64,7 +64,7 @@ from ..remote_build.peer_link_client import (
     SubmitJobSessionLostError,
     SubmitJobTimeoutError,
 )
-from . import lifecycle, ota_system
+from . import cli, lifecycle, ota_system
 from .bundle_phase import run_bundle_phase
 from .constants import ESPHOME_SUBPROCESS_ENV
 from .helpers import (
@@ -196,6 +196,8 @@ async def run_remote_job(  # noqa: C901
     if not job.source_pin_sha256:
         _fail_locally(controller, job, reason="missing source_pin_sha256")
         return
+
+    await cli.probe_chip_revision(controller, job)
 
     bus = controller.bus
     pin = job.source_pin_sha256
@@ -451,6 +453,7 @@ async def _submit_job_to_receiver(
             # The receiver gates this on the esphome it actually runs.
             skip_bootloader=job.skip_bootloader,
             ota_system=bool(job.ota_system),
+            chip_revision=job.chip_revision,
         )
     except _PEER_LINK_ACKED_REQUEST_ERRORS as exc:
         _fail_locally(controller, job, reason=f"dispatch failed: {exc}")

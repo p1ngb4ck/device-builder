@@ -111,6 +111,7 @@ async def execute_job(  # noqa: PLR0915, PLR0912, C901
         # Pre-flight: verify chip type for serial uploads
         if job.job_type in (JobType.UPLOAD, JobType.INSTALL):
             await controller._verify_chip(job)
+        await cli.probe_chip_revision(controller, job)
 
         # A rename tail runs as a plain ``esphome upload`` of the *renamed*
         # YAML; ``job.configuration`` stays the old filename (rename lock,

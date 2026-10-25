@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 _REVISION_RE = re.compile(r"\(revision v(\d+)\.(\d+)\)")
+CHIP_REVISION_ENV = "ESPHOME_CHIP_REVISION"
 
 
 # ``esphome compile --skip-bootloader`` first shipped in this release line.
@@ -60,6 +61,8 @@ def compose_subprocess_env(job: FirmwareJob) -> dict[str, str]:
         env.pop("ESPHOME_IS_HA_ADDON", None)
     elif job.ota_system or ota_system.is_system_configuration(job.configuration):
         env["ESPHOME_DATA_DIR"] = str(CORE.data_dir)
+    if job.chip_revision is not None:
+        env[CHIP_REVISION_ENV] = str(job.chip_revision)
     return env
 
 
@@ -165,19 +168,7 @@ async def verify_chip(controller: FirmwareController, job: FirmwareJob) -> None:
 
     expected_platform = storage.target_platform.lower()
 
-    async with controller._tracked_subprocess(
-        job,
-        *find_esptool_cmd(),
-        "--port",
-        job.port,
-        "chip-id",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        start_new_session=True,
-    ) as proc:
-        assert proc.stdout is not None  # type narrowing
-        output = (await proc.stdout.read()).decode("utf-8", errors="replace")
-        await proc.wait()
+    output = await _chip_id_output(controller, job, job.port)
 
     # Honour an early cancel that arrived during chip detection
     # (the main install hasn't spawned yet, so the post-wait check
@@ -214,3 +205,32 @@ async def verify_chip(controller: FirmwareController, job: FirmwareJob) -> None:
     ) is not None:
         devices.set_chip_revision(job.configuration, int(match[1]) * 100 + int(match[2]))
     _LOGGER.debug("Chip verified: %s on %s", detected, job.port)
+
+
+async def probe_chip_revision(controller: FirmwareController, job: FirmwareJob) -> None:
+    if not job.chip_probe_port or job.chip_revision is not None:
+        return
+    output = await _chip_id_output(controller, job, job.chip_probe_port)
+    lifecycle.raise_if_cancelled(controller, job, "chip revision")
+    if (match := _REVISION_RE.search(output)) is None:
+        return
+    job.chip_revision = int(match[1]) * 100 + int(match[2])
+    if (devices := controller._db.devices) is not None:
+        devices.set_chip_revision(job.configuration, job.chip_revision)
+
+
+async def _chip_id_output(controller: FirmwareController, job: FirmwareJob, port: str) -> str:
+    async with controller._tracked_subprocess(
+        job,
+        *find_esptool_cmd(),
+        "--port",
+        port,
+        "chip-id",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
+    ) as proc:
+        assert proc.stdout is not None  # type narrowing
+        output = (await proc.stdout.read()).decode("utf-8", errors="replace")
+        await proc.wait()
+    return output
