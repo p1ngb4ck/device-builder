@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import binascii
 import logging
 import struct
@@ -14,7 +15,6 @@ from esphome.storage_json import StorageJSON
 from esphome.upload_targets import PortType, get_port_type
 
 from ...helpers.async_ import run_in_executor
-from ...helpers.device_yaml import EsphomeConfigUnavailableError, run_esphome_config
 from ...helpers.device_yaml._tolerant_yaml import load_yaml_tolerant
 from ...helpers.json import JSONDecodeError, dumps, loads
 from ...helpers.storage_path import resolve_storage_path
@@ -290,15 +290,27 @@ async def generate_system(
     controller: FirmwareController, job: FirmwareJob, configuration: str
 ) -> None:
     _emit(controller, job, "INFO Writing the OTA system configuration (esphome config)")
-    await _generate_system(controller, main_configuration(configuration))
-
-
-async def _generate_system(controller: FirmwareController, configuration: str) -> None:
-    path = await run_in_executor(controller._db.settings.rel_path, configuration)
+    main = main_configuration(configuration)
+    path = await run_in_executor(controller._db.settings.rel_path, main)
+    cmd = [*await controller._resolve_esphome_cmd(job), "--dashboard", "config", str(path)]
     try:
-        await run_esphome_config(controller.state.esphome_cmd, path)
-    except EsphomeConfigUnavailableError as exc:
-        _LOGGER.warning("esphome config for %s did not run: %s", configuration, exc)
+        async with controller._tracked_subprocess(
+            job,
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=controller._compose_subprocess_env(job),
+            start_new_session=True,
+        ) as proc:
+            assert proc.stdout is not None
+            output = await proc.stdout.read()
+            code = await proc.wait()
+    except OSError as exc:
+        _emit(controller, job, f"ERROR esphome config did not run: {exc}")
+        return
+    if code != 0:
+        for line in output.decode("utf-8", errors="replace").splitlines():
+            _emit(controller, job, line)
 
 
 async def _reboot_to_system(controller: FirmwareController, job: FirmwareJob) -> str:
