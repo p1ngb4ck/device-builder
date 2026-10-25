@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 from ...helpers.async_ import drain_tasks, run_in_executor
 from ...helpers.config_bundle import build_yaml_bundle
-from . import ota_system
 from .helpers import _ingest_notice_line, _ingest_output_line
 
 if TYPE_CHECKING:
@@ -29,12 +28,7 @@ async def run_bundle_phase(
     ``BundleBuildError`` from the build propagate. A heartbeat notice
     ticks while the bundle runs so a silent validator still shows liveness.
     """
-    if ota_system.is_system_configuration(job.configuration):
-        await ota_system.generate_system(controller, job, job.configuration)
-    configuration = await run_in_executor(
-        ota_system.stage_bundle_copy, controller, job.configuration
-    )
-    yaml_path = await run_in_executor(controller._db.settings.rel_path, configuration)
+    yaml_path = await run_in_executor(controller._db.settings.rel_path, job.configuration)
     bus = controller.bus
     _ingest_notice_line(job, bus, "building configuration bundle for remote build")
     bundle_task = asyncio.create_task(

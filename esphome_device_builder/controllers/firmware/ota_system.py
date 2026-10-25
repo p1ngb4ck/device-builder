@@ -33,8 +33,6 @@ _LOGGER = logging.getLogger(__name__)
 
 _CONF_OTA = "ota"
 _CONF_OTA_SYSTEM = "ota_system"
-_CONF_METHOD = "method"
-_CONF_MIGRATE_VIA_OTA = "migrate_via_ota"
 _SYSTEM_FILENAME = "ota_system.yaml"
 _FACTORY_FILENAME = "firmware.factory.bin"
 _MERGED_FILENAME = "firmware.ota_system.factory.bin"
@@ -78,33 +76,11 @@ RunStep = Callable[..., Awaitable[tuple[int, bool, bool]]]
 @dataclass(frozen=True)
 class OtaSystem:
     configuration: str
-    method: str
-    migrate_via_ota: bool
 
 
 def system_configuration(configuration: str) -> str:
     path = Path(configuration)
     return (path.parent / path.stem / "ota" / _SYSTEM_FILENAME).as_posix()
-
-
-def is_system_configuration(configuration: str) -> bool:
-    path = Path(configuration)
-    return path.name == _SYSTEM_FILENAME and path.parent.name == "ota"
-
-
-def bundle_configuration(configuration: str) -> str:
-    if not is_system_configuration(configuration):
-        return configuration
-    device = Path(configuration).parent.parent
-    return (device.parent / f".{device.name}.{_SYSTEM_FILENAME}").as_posix()
-
-
-def stage_bundle_copy(controller: FirmwareController, configuration: str) -> str:
-    staged = bundle_configuration(configuration)
-    if staged != configuration:
-        source = controller._db.settings.rel_path(configuration)
-        controller._db.settings.rel_path(staged).write_bytes(source.read_bytes())
-    return staged
 
 
 def parse_ota_system(yaml_content: str, configuration: str) -> OtaSystem | None:
@@ -113,11 +89,7 @@ def parse_ota_system(yaml_content: str, configuration: str) -> OtaSystem | None:
     for entry in entries if isinstance(entries, list) else ():
         system = entry.get(_CONF_OTA_SYSTEM) if isinstance(entry, dict) else None
         if isinstance(system, dict):
-            return OtaSystem(
-                configuration=system_configuration(configuration),
-                method=str(system.get(_CONF_METHOD, "")).lower(),
-                migrate_via_ota=system.get(_CONF_MIGRATE_VIA_OTA) is True,
-            )
+            return OtaSystem(configuration=system_configuration(configuration))
     return None
 
 
@@ -190,22 +162,9 @@ def _create_compile(
 
 
 async def enqueue_queued_upload(controller: FirmwareController, job: FirmwareJob) -> None:
-    system = await detect(controller, job.configuration)
-    if system is None:
-        await controller._enqueue(job)
-        return
-    system_compile = factories.create_job(
-        controller,
-        system.configuration,
-        JobType.COMPILE,
-        build_source=controller._resolve_install_source(),
-        skip_bootloader=True,
-    )
-    job.depends_on = system_compile.job_id
-    job.ota_system = system.configuration
-    await factories.commit_chain(
-        controller, system_compile, job, supersede_configuration=job.configuration
-    )
+    if (system := await detect(controller, job.configuration)) is not None:
+        job.ota_system = system.configuration
+    await controller._enqueue(job)
 
 
 async def run_compile(
