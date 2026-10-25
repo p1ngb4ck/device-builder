@@ -136,7 +136,8 @@ def main() -> int:
         return 2
     try:
         modes = {"query": _query, "wait": _wait, "reboot_main": _reboot_main}
-        result = asyncio.run(modes.get(request.get("mode"), _reboot)(request))
+        mode = request.get("mode") or ("query" if request.get("query") else "reboot")
+        result = asyncio.run(modes.get(mode, _reboot)(request))
     except Exception as exc:
         sys.stdout.write(dumps_str({"error": repr(exc)}))
         return 1
