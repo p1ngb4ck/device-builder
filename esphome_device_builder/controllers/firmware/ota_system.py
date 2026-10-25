@@ -47,7 +47,8 @@ _OTADATA_SEQ = struct.Struct("<I")
 _OTADATA_CRC_OFFSET = 28
 _OTA_0_SEQ = 1
 _REBOOT_WORKER = "esphome_device_builder.helpers.api_reboot_to_system"
-_REBOOT_TIMEOUT = 45.0
+_REBOOT_TIMEOUT = 300.0
+_SYSTEM_NOT_UP_ERROR = "ERROR The device did not come up in the OTA system after the restart"
 _MIGRATE_WARNINGS = (
     "WARNING Migrating an official ESPHome install to the OTA system via OTA.",
     "WARNING ESPHome does not consider the partition table update via OTA stable.",
@@ -209,7 +210,10 @@ async def run_upload(
         _emit(controller, job, f"INFO Factory image with the OTA system: {image}")
         return await run(job.configuration, job.port, upload_file=str(image))
     outcome = await _reboot_to_system(controller, job)
-    _emit(controller, job, f"INFO Reboot into the OTA system: {outcome}")
+    _emit(controller, job, f"INFO OTA system: {outcome}")
+    if outcome == "system_not_up":
+        _emit(controller, job, _SYSTEM_NOT_UP_ERROR)
+        return 1, False, False
     if outcome == "no_action":
         for line in _MIGRATE_WARNINGS:
             _emit(controller, job, line)

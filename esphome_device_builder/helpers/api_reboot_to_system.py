@@ -12,10 +12,12 @@ _ACTION = "reboot_to_ota_system"
 _SYSTEM_MARKER = "ota_system_running"
 _CONNECT_TIMEOUT = 10.0
 _REBOOT_TIMEOUT = 20.0
+_SYSTEM_TIMEOUT = 180.0
+_RETRY_DELAY = 3.0
 
 
-async def _reboot(request: dict[str, Any]) -> dict[str, str]:
-    client = APIClient(
+def _client(request: dict[str, Any]) -> APIClient:
+    return APIClient(
         request["address"],
         request["port"],
         None,
@@ -23,6 +25,32 @@ async def _reboot(request: dict[str, Any]) -> dict[str, str]:
         noise_psk=request.get("noise_psk") or None,
         addresses=request.get("addresses") or None,
     )
+
+
+async def _system_running(request: dict[str, Any]) -> bool:
+    client = _client(request)
+    try:
+        await asyncio.wait_for(client.connect(login=False), _CONNECT_TIMEOUT)
+        _, services = await client.list_entities_services()
+        return any(s.name == _SYSTEM_MARKER for s in services)
+    finally:
+        await client.disconnect(force=True)
+
+
+async def _wait_for_system(request: dict[str, Any]) -> bool:
+    deadline = asyncio.get_running_loop().time() + _SYSTEM_TIMEOUT
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            if await _system_running(request):
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(_RETRY_DELAY)
+    return False
+
+
+async def _reboot(request: dict[str, Any]) -> dict[str, str]:
+    client = _client(request)
     stopped = asyncio.Event()
 
     async def _on_stop(expected_disconnect: bool) -> None:
@@ -39,9 +67,11 @@ async def _reboot(request: dict[str, Any]) -> dict[str, str]:
             return {"outcome": "no_action"}
         await client.execute_service(service, {})
         await asyncio.wait_for(stopped.wait(), _REBOOT_TIMEOUT)
-        return {"outcome": "rebooted"}
     finally:
         await client.disconnect(force=True)
+    if await _wait_for_system(request):
+        return {"outcome": "in_system"}
+    return {"outcome": "system_not_up"}
 
 
 def main() -> int:
