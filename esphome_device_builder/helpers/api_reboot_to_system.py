@@ -11,6 +11,7 @@ from .json import JSONDecodeError, dumps_str, loads
 _ACTION = "reboot_to_ota_system"
 _SYSTEM_MARKER = "ota_system_running"
 _ELF_ACTION = "ota_system_elf"
+_MAIN_ACTION = "reboot_to_main"
 _CONNECT_TIMEOUT = 10.0
 _REBOOT_TIMEOUT = 20.0
 _SYSTEM_TIMEOUT = 180.0
@@ -64,10 +65,40 @@ async def _query(request: dict[str, Any]) -> dict[str, Any]:
         if elf is not None:
             response = await client.execute_service(elf, {}, return_response=True)
             if response is not None and response.success and response.response_data:
-                value = loads(response.response_data).get("elf_sha256")
-                if isinstance(value, str):
-                    result["elf_sha256"] = value
+                answer = loads(response.response_data)
+                for key in ("elf_sha256", "main_elf_sha256"):
+                    if isinstance(answer.get(key), str):
+                        result[key] = answer[key]
+                result["self_update"] = answer.get("self_update") is True
         return result
+    finally:
+        await client.disconnect(force=True)
+
+
+async def _wait(request: dict[str, Any]) -> dict[str, str]:
+    expect = request.get("expect_elf") or ""
+    deadline = asyncio.get_running_loop().time() + _SYSTEM_TIMEOUT
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            state = await _query(request)
+            if state.get("in_system") and (not expect or state.get("elf_sha256") == expect):
+                return {"outcome": "in_system"}
+        except Exception:
+            pass
+        await asyncio.sleep(_RETRY_DELAY)
+    return {"outcome": "system_not_up"}
+
+
+async def _reboot_main(request: dict[str, Any]) -> dict[str, str]:
+    client = _client(request)
+    try:
+        await asyncio.wait_for(client.connect(login=False), _CONNECT_TIMEOUT)
+        _, services = await client.list_entities_services()
+        service = next((s for s in services if s.name == _MAIN_ACTION), None)
+        if service is None:
+            return {"outcome": "no_action"}
+        await client.execute_service(service, {})
+        return {"outcome": "rebooting"}
     finally:
         await client.disconnect(force=True)
 
@@ -104,7 +135,8 @@ def main() -> int:
         sys.stdout.write(dumps_str({"error": f"bad request: {exc!r}"}))
         return 2
     try:
-        result = asyncio.run(_query(request) if request.get("query") else _reboot(request))
+        modes = {"query": _query, "wait": _wait, "reboot_main": _reboot_main}
+        result = asyncio.run(modes.get(request.get("mode"), _reboot)(request))
     except Exception as exc:
         sys.stdout.write(dumps_str({"error": repr(exc)}))
         return 1

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import binascii
 import logging
+import os
 import struct
 import sys
 from collections.abc import Awaitable, Callable
@@ -17,6 +18,7 @@ from esphome.upload_targets import PortType, get_port_type
 from ...helpers.async_ import run_in_executor
 from ...helpers.device_yaml._tolerant_yaml import load_yaml_tolerant
 from ...helpers.json import JSONDecodeError, dumps, loads
+from ...helpers.sibling_cli import find_esptool_cmd
 from ...helpers.storage_path import resolve_storage_path
 from ...helpers.subprocess import run_subprocess_capture
 from ...models import FirmwareJob, JobType
@@ -55,9 +57,14 @@ _APP_DESC_MAGIC = 0xABCD5432
 _APP_DESC_ELF_SHA256 = 144
 _SHA256_SIZE = 32
 _SYSTEM_CHANGED_WARNINGS = (
-    "WARNING The OTA system changed since it was flashed onto this device.",
-    "WARNING Flash the device via serial: the full image with both systems.",
+    "WARNING The OTA system changed, and the OTA system on the device cannot update itself.",
+    "WARNING Flash the device via serial once: the full image with both systems.",
 )
+_NOTHING_TO_FLASH = "INFO Both systems are unchanged on the device: nothing to flash"
+_SYSTEM_PART_FILENAME = "firmware.ota_system.part.bin"
+_OTADATA_PART_FILENAME = "firmware.otadata.bin"
+_UPLOAD_SPEED_ENV = "ESPHOME_UPLOAD_SPEED"
+_UPLOAD_SPEED = "460800"
 _SYSTEM_NOT_UP_ERROR = "ERROR The device did not come up in the OTA system after the restart"
 _MIGRATE_WARNINGS = (
     "WARNING Migrating an official ESPHome install to the OTA system via OTA.",
@@ -237,24 +244,43 @@ async def run_upload(
     if system is None:
         return await run(job.configuration, job.port)
     if get_port_type(job.port) is PortType.SERIAL:
-        image = await run_in_executor(build_factory_image, job.configuration, system)
-        _emit(controller, job, f"INFO Factory image with the OTA system: {image}")
-        result = await run(job.configuration, job.port, upload_file=str(image))
-        await _remember_flashed_system(controller, job, system, result)
-        return result
-    state = await _system_worker(controller, job, query=True)
-    if state.get("in_system") or state.get("reboot_action"):
-        device_elf = str(state.get("elf_sha256") or "")
-        if not await run_in_executor(_system_unchanged, controller, job, system, device_elf):
-            for line in _SYSTEM_CHANGED_WARNINGS:
-                _emit(controller, job, line)
+        return await _serial_upload(controller, job, system, run)
+    return await _ota_upload(controller, job, system, run)
+
+
+async def _serial_upload(
+    controller: FirmwareController, job: FirmwareJob, system: OtaSystem, run: RunStep
+) -> tuple[int, bool, bool]:
+    built = await run_in_executor(_built_state, job.configuration, system)
+    flashed = _flashed_state(controller, job)
+    write_system = not built.system_fingerprint or flashed.system != built.system_fingerprint
+    write_main = not built.main_fingerprint or flashed.main != built.main_fingerprint
+    if not write_system and not write_main:
+        _emit(controller, job, _NOTHING_TO_FLASH)
+        return 0, False, False
+    parts = await run_in_executor(_serial_parts, job.configuration, system, write_system, write_main)
+    for offset, path in parts:
+        _emit(controller, job, f"INFO Serial flash: {path.name} at 0x{offset:X}")
+    if write_system and write_main:
+        result = await run(job.configuration, job.port, upload_file=str(parts[0][1]))
+    else:
+        command = await run_in_executor(_write_flash_command, job, parts)
+        result = await run(job.configuration, job.port, command=command)
+    if result[0] == 0 and not result[1]:
+        _remember_flashed(controller, job, built, system=write_system, main=write_main)
+    return result
+
+
+async def _ota_upload(
+    controller: FirmwareController, job: FirmwareJob, system: OtaSystem, run: RunStep
+) -> tuple[int, bool, bool]:
+    state = await _system_worker(controller, job, mode="query")
+    if not state.get("in_system") and not state.get("reboot_action"):
+        outcome = await _reboot_to_system(controller, job)
+        _emit(controller, job, f"INFO OTA system: {outcome}")
+        if outcome != "no_action":
+            _emit(controller, job, f"ERROR The device could not be asked: {outcome}")
             return 1, False, False
-    outcome = await _reboot_to_system(controller, job)
-    _emit(controller, job, f"INFO OTA system: {outcome}")
-    if outcome == "system_not_up":
-        _emit(controller, job, _SYSTEM_NOT_UP_ERROR)
-        return 1, False, False
-    if outcome == "no_action":
         for line in _MIGRATE_WARNINGS:
             _emit(controller, job, line)
         result = await _sequence(
@@ -262,9 +288,50 @@ async def run_upload(
             partial(run, system.configuration, job.port, partition_table=True),
             partial(run, job.configuration, job.port),
         )
-        await _remember_flashed_system(controller, job, system, result)
+        if result[0] == 0 and not result[1]:
+            built = await run_in_executor(_built_state, job.configuration, system)
+            _remember_flashed(controller, job, built, system=True, main=True)
         return result
-    return await run(job.configuration, job.port)
+    built = await run_in_executor(_built_state, job.configuration, system)
+    flashed = _flashed_state(controller, job)
+    system_changed = _changed(
+        str(state.get("elf_sha256") or ""), built.system_elf, flashed.system, built.system_fingerprint
+    )
+    main_changed = _changed(
+        str(state.get("main_elf_sha256") or ""), built.main_elf, flashed.main, built.main_fingerprint
+    )
+    if not system_changed and not main_changed:
+        _emit(controller, job, _NOTHING_TO_FLASH)
+        return 0, False, False
+    if not state.get("in_system"):
+        outcome = await _reboot_to_system(controller, job)
+        _emit(controller, job, f"INFO OTA system: {outcome}")
+        if outcome != "in_system":
+            _emit(controller, job, _SYSTEM_NOT_UP_ERROR)
+            return 1, False, False
+        state = await _system_worker(controller, job, mode="query")
+    if system_changed:
+        if not state.get("self_update"):
+            for line in _SYSTEM_CHANGED_WARNINGS:
+                _emit(controller, job, line)
+            return 1, False, False
+        _emit(controller, job, "INFO The OTA system changed: it updates itself first")
+        result = await run(system.configuration, job.port)
+        if result[0] != 0 or result[1]:
+            return result
+        _remember_flashed(controller, job, built, system=True, main=False)
+        waited = await _system_worker(controller, job, mode="wait", expect_elf=built.system_elf)
+        if waited.get("outcome") != "in_system":
+            _emit(controller, job, _SYSTEM_NOT_UP_ERROR)
+            return 1, False, False
+    if main_changed:
+        result = await run(job.configuration, job.port)
+        if result[0] == 0 and not result[1]:
+            _remember_flashed(controller, job, built, system=False, main=True)
+        return result
+    outcome = await _system_worker(controller, job, mode="reboot_main")
+    _emit(controller, job, f"INFO Back to the main firmware: {outcome.get('outcome', 'no answer')}")
+    return 0, False, False
 
 
 def built_fingerprint(system_configuration: str) -> str:
@@ -361,12 +428,12 @@ async def generate_system(
 
 
 async def _reboot_to_system(controller: FirmwareController, job: FirmwareJob) -> str:
-    parsed = await _system_worker(controller, job, query=False)
+    parsed = await _system_worker(controller, job, mode="reboot")
     return str(parsed.get("outcome") or parsed.get("error") or "no answer")
 
 
 async def _system_worker(
-    controller: FirmwareController, job: FirmwareJob, *, query: bool
+    controller: FirmwareController, job: FirmwareJob, *, mode: str, expect_elf: str = ""
 ) -> dict[str, Any]:
     devices = controller._db.devices
     device = devices.get_by_configuration(job.configuration) if devices is not None else None
@@ -388,7 +455,8 @@ async def _system_worker(
             "port": port,
             "noise_psk": noise_psk,
             "addresses": addresses,
-            "query": query,
+            "mode": mode,
+            "expect_elf": expect_elf,
         }
     )
     try:
@@ -456,10 +524,64 @@ def _store_built_main_fingerprint(configuration: str, fingerprint: str) -> None:
         path.write_text(f"{fingerprint}\n", encoding="utf-8")
 
 
-def _built_elf_sha256(system_configuration: str) -> str:
+@dataclass(frozen=True)
+class _BuiltState:
+    system_fingerprint: str
+    main_fingerprint: str
+    system_elf: str
+    main_elf: str
+
+
+@dataclass(frozen=True)
+class _FlashedState:
+    system: str | None
+    main: str | None
+
+
+def _built_state(configuration: str, system: OtaSystem) -> _BuiltState:
+    return _BuiltState(
+        system_fingerprint=built_fingerprint(system.configuration),
+        main_fingerprint=built_main_fingerprint(configuration),
+        system_elf=_image_elf_sha256(system.configuration),
+        main_elf=_image_elf_sha256(configuration),
+    )
+
+
+def _flashed_state(controller: FirmwareController, job: FirmwareJob) -> _FlashedState:
+    devices = controller._db.devices
+    if devices is None:
+        return _FlashedState(system=None, main=None)
+    return _FlashedState(
+        system=devices.ota_system_fingerprint(job.configuration),
+        main=devices.main_fingerprint(job.configuration),
+    )
+
+
+def _changed(device_elf: str, built_elf: str, flashed: str | None, built_fingerprint: str) -> bool:
+    if device_elf and built_elf:
+        return device_elf != built_elf
+    return not built_fingerprint or flashed != built_fingerprint
+
+
+def _remember_flashed(
+    controller: FirmwareController, job: FirmwareJob, built: _BuiltState, *, system: bool, main: bool
+) -> None:
+    devices = controller._db.devices
+    if devices is None:
+        return
+    if system and built.system_fingerprint:
+        devices.set_ota_system_fingerprint(job.configuration, built.system_fingerprint)
+    if main and built.main_fingerprint:
+        devices.set_main_fingerprint(job.configuration, built.main_fingerprint)
+
+
+def _image_elf_sha256(configuration: str) -> str:
     end = _APP_DESC_OFFSET + _APP_DESC_ELF_SHA256 + _SHA256_SIZE
-    with _firmware_bin(resolve_storage_path(system_configuration)).open("rb") as image:
-        head = image.read(end)
+    try:
+        with _firmware_bin(resolve_storage_path(configuration)).open("rb") as image:
+            head = image.read(end)
+    except (OSError, ValueError):
+        return ""
     if len(head) < end or int.from_bytes(head[_APP_DESC_OFFSET : _APP_DESC_OFFSET + 4], "little") != (
         _APP_DESC_MAGIC
     ):
@@ -467,32 +589,48 @@ def _built_elf_sha256(system_configuration: str) -> str:
     return head[_APP_DESC_OFFSET + _APP_DESC_ELF_SHA256 : end].hex()
 
 
-def _system_unchanged(
-    controller: FirmwareController, job: FirmwareJob, system: OtaSystem, device_elf: str
-) -> bool:
-    if device_elf:
-        try:
-            return device_elf == _built_elf_sha256(system.configuration)
-        except (OSError, ValueError):
-            return False
-    built = built_fingerprint(system.configuration)
-    devices = controller._db.devices
-    flashed = devices.ota_system_fingerprint(job.configuration) if devices is not None else None
-    return bool(built) and flashed == built
+def _serial_parts(
+    configuration: str, system: OtaSystem, write_system: bool, write_main: bool
+) -> list[tuple[int, Path]]:
+    merged = build_factory_image(configuration, system)
+    if write_system and write_main:
+        return [(0, merged)]
+    image = merged.read_bytes()
+    system_bin = _firmware_bin(resolve_storage_path(system.configuration))
+    ota_0, otadata = _partitions((system_bin.parent / _FACTORY_FILENAME).read_bytes())
+    if write_system:
+        part = merged.with_name(_SYSTEM_PART_FILENAME)
+        part.write_bytes(image[: ota_0[0]])
+        return [(0, part)]
+    start, size = otadata
+    otadata_part = merged.with_name(_OTADATA_PART_FILENAME)
+    otadata_part.write_bytes(image[start : start + size])
+    return [(start, otadata_part), (ota_0[0], _firmware_bin(resolve_storage_path(configuration)))]
 
 
-async def _remember_flashed_system(
-    controller: FirmwareController,
-    job: FirmwareJob,
-    system: OtaSystem,
-    result: tuple[int, bool, bool],
-) -> None:
-    if result[0] != 0 or result[1]:
-        return
-    built = await run_in_executor(built_fingerprint, system.configuration)
-    devices = controller._db.devices
-    if built and devices is not None:
-        devices.set_ota_system_fingerprint(job.configuration, built)
+def _write_flash_command(job: FirmwareJob, parts: list[tuple[int, Path]]) -> list[str]:
+    storage = StorageJSON.load(resolve_storage_path(job.configuration))
+    chip = (storage.target_platform if storage is not None else "") or "auto"
+    command = [
+        *find_esptool_cmd(),
+        "--before",
+        "default-reset",
+        "--after",
+        "hard-reset",
+        "--baud",
+        os.getenv(_UPLOAD_SPEED_ENV, _UPLOAD_SPEED),
+        "--port",
+        job.port,
+        "--chip",
+        chip.lower(),
+        "write-flash",
+        "-z",
+        "--flash-size",
+        "detect",
+    ]
+    for offset, path in parts:
+        command += [f"0x{offset:X}", str(path)]
+    return command
 
 
 async def _sequence(

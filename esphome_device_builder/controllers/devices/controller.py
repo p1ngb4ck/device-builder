@@ -395,6 +395,14 @@ class DevicesController(  # noqa: PLR0904 (grandfathered; new public methods nee
         if self.ota_system_fingerprint(configuration) != fingerprint:
             self._metadata_store.set_field(configuration, "ota_system_fingerprint", fingerprint)
 
+    def main_fingerprint(self, configuration: str) -> str | None:
+        value = self._metadata_store.get_field(configuration, "main_fingerprint")
+        return value if isinstance(value, str) and value else None
+
+    def set_main_fingerprint(self, configuration: str, fingerprint: str) -> None:
+        if self.main_fingerprint(configuration) != fingerprint:
+            self._metadata_store.set_field(configuration, "main_fingerprint", fingerprint)
+
     def probe_reachability_if_unknown(self, configuration: str) -> None:
         """
         Nudge an immediate mDNS resolve + ICMP sweep for a device still UNKNOWN.

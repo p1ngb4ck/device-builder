@@ -129,6 +129,7 @@ async def execute_job(  # noqa: PLR0915, PLR0912, C901
             partition_table: bool = False,
             upload_file: str = "",
             full_image: bool = False,
+            command: list[str] | None = None,
         ) -> tuple[int, bool, bool]:
             # ``rel_path`` calls ``Path.resolve`` which does a sync
             # ``os.path.realpath`` — blocking the event loop. Push it
@@ -159,6 +160,8 @@ async def execute_job(  # noqa: PLR0915, PLR0912, C901
                 partition_table=partition_table,
                 upload_file=upload_file,
             )
+            if command is not None:
+                cmd = command
             _LOGGER.debug("Running: %s", " ".join(cmd))
             return await _run_command(controller, job, cmd, env)
 
