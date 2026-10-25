@@ -35,6 +35,7 @@ STORE_FIELDS: frozenset[str] = frozenset(
         "queued_update",
         "api_encryption_active",
         "chip_revision",
+        "ota_system_fingerprint",
         "expected_config_hash",
         "regen_config_hash",
         "regen_content_fingerprint",

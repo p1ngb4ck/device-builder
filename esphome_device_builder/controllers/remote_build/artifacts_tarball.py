@@ -64,6 +64,7 @@ from ...constants import toolchain_artifacts
 from ...helpers.artifacts_tarball_members import (
     BUILD_INFO_MEMBER_NAME,
     IDEDATA_MEMBER_NAME,
+    OTA_SYSTEM_FINGERPRINT_NAME,
     OTA_SYSTEM_MEMBER_PREFIX,
     PLATFORMIO_INI_MEMBER_NAME,
     STORAGE_MEMBER_NAME,
@@ -166,6 +167,11 @@ def pack_build_artifacts(configuration: str, ota_system: str = "") -> PackedArti
                 build_path=Path(system_storage.build_path),
             )
         ]
+        system_fingerprint = Path(system_storage.build_path) / OTA_SYSTEM_FINGERPRINT_NAME
+        if system_fingerprint.is_file():
+            members.append(
+                (f"{OTA_SYSTEM_MEMBER_PREFIX}{OTA_SYSTEM_FINGERPRINT_NAME}", system_fingerprint)
+            )
     firmware_offset = _firmware_offset_for_platform(storage.target_platform or "")
     tarball = _render_tarball(members, configuration=configuration)
     return PackedArtifacts(tarball=tarball, firmware_offset=firmware_offset)

@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from esphome.storage_json import StorageJSON
 from esphome.upload_targets import PortType, get_port_type
@@ -48,6 +48,15 @@ _OTADATA_CRC_OFFSET = 28
 _OTA_0_SEQ = 1
 _REBOOT_WORKER = "esphome_device_builder.helpers.api_reboot_to_system"
 _REBOOT_TIMEOUT = 300.0
+_FINGERPRINT_FILENAME = "ota_system.fingerprint"
+_APP_DESC_OFFSET = 32
+_APP_DESC_MAGIC = 0xABCD5432
+_APP_DESC_ELF_SHA256 = 144
+_SHA256_SIZE = 32
+_SYSTEM_CHANGED_WARNINGS = (
+    "WARNING The OTA system changed since it was flashed onto this device.",
+    "WARNING Flash the device via serial: the full image with both systems.",
+)
 _SYSTEM_NOT_UP_ERROR = "ERROR The device did not come up in the OTA system after the restart"
 _MIGRATE_WARNINGS = (
     "WARNING Migrating an official ESPHome install to the OTA system via OTA.",
@@ -194,11 +203,17 @@ async def run_compile(
     controller: FirmwareController, job: FirmwareJob, run: RunStep
 ) -> tuple[int, bool, bool]:
     await generate_system(controller, job, job.ota_system)
-    result = await run(job.ota_system, job.port)
-    if result[0] != 0 or result[1]:
-        return result
-    job.progress = 0
-    job.ninja_total = 0
+    fingerprint = await run_in_executor(_written_fingerprint, controller, job.ota_system)
+    if fingerprint and fingerprint == await run_in_executor(built_fingerprint, job.ota_system):
+        _emit(controller, job, "INFO OTA system unchanged: its build is kept")
+    else:
+        result = await run(job.ota_system, job.port)
+        if result[0] != 0 or result[1]:
+            return result
+        if fingerprint:
+            await run_in_executor(_store_built_fingerprint, job.ota_system, fingerprint)
+        job.progress = 0
+        job.ninja_total = 0
     return await run(job.configuration, job.port)
 
 
@@ -211,7 +226,16 @@ async def run_upload(
     if get_port_type(job.port) is PortType.SERIAL:
         image = await run_in_executor(build_factory_image, job.configuration, system)
         _emit(controller, job, f"INFO Factory image with the OTA system: {image}")
-        return await run(job.configuration, job.port, upload_file=str(image))
+        result = await run(job.configuration, job.port, upload_file=str(image))
+        await _remember_flashed_system(controller, job, system, result)
+        return result
+    state = await _system_worker(controller, job, query=True)
+    if state.get("in_system") or state.get("reboot_action"):
+        device_elf = str(state.get("elf_sha256") or "")
+        if not await run_in_executor(_system_unchanged, controller, job, system, device_elf):
+            for line in _SYSTEM_CHANGED_WARNINGS:
+                _emit(controller, job, line)
+            return 1, False, False
     outcome = await _reboot_to_system(controller, job)
     _emit(controller, job, f"INFO OTA system: {outcome}")
     if outcome == "system_not_up":
@@ -220,12 +244,24 @@ async def run_upload(
     if outcome == "no_action":
         for line in _MIGRATE_WARNINGS:
             _emit(controller, job, line)
-        return await _sequence(
+        result = await _sequence(
             partial(run, system.configuration, job.port),
             partial(run, system.configuration, job.port, partition_table=True),
             partial(run, job.configuration, job.port),
         )
+        await _remember_flashed_system(controller, job, system, result)
+        return result
     return await run(job.configuration, job.port)
+
+
+def built_fingerprint(system_configuration: str) -> str:
+    path = _built_fingerprint_path(system_configuration)
+    if path is None:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def build_factory_image(configuration: str, system: OtaSystem) -> Path:
@@ -314,22 +350,35 @@ async def generate_system(
 
 
 async def _reboot_to_system(controller: FirmwareController, job: FirmwareJob) -> str:
+    parsed = await _system_worker(controller, job, query=False)
+    return str(parsed.get("outcome") or parsed.get("error") or "no answer")
+
+
+async def _system_worker(
+    controller: FirmwareController, job: FirmwareJob, *, query: bool
+) -> dict[str, Any]:
     devices = controller._db.devices
     device = devices.get_by_configuration(job.configuration) if devices is not None else None
     if devices is None or device is None:
-        return "no_device"
+        return {"outcome": "no_device"}
     addresses = list(device.runtime_state.ip_addresses) or [
         a for a in (device.ip, device.address) if a
     ]
     if not addresses:
-        return "no_address"
+        return {"outcome": "no_address"}
     try:
         noise_psk, port = await encryption_key_lookup.get_api_connection(devices, job.configuration)
     except Exception as exc:
         _LOGGER.warning("Native API key lookup for %s failed: %s", job.configuration, exc)
-        return "no_api_key"
+        return {"outcome": "no_api_key"}
     request = dumps(
-        {"address": addresses[0], "port": port, "noise_psk": noise_psk, "addresses": addresses}
+        {
+            "address": addresses[0],
+            "port": port,
+            "noise_psk": noise_psk,
+            "addresses": addresses,
+            "query": query,
+        }
     )
     try:
         result = await run_subprocess_capture(
@@ -341,16 +390,78 @@ async def _reboot_to_system(controller: FirmwareController, job: FirmwareJob) ->
             merge_stderr=False,
         )
     except OSError as exc:
-        return f"worker failed: {exc}"
+        return {"outcome": f"worker failed: {exc}"}
     if result.timed_out:
-        return "timed out"
+        return {"outcome": "timed out"}
     try:
         parsed = loads(result.stdout) if result.stdout else None
     except (JSONDecodeError, ValueError):
         parsed = None
     if not isinstance(parsed, dict):
-        return "no answer"
-    return str(parsed.get("outcome") or parsed.get("error") or "no answer")
+        return {"outcome": "no answer"}
+    return parsed
+
+
+def _written_fingerprint(controller: FirmwareController, system_configuration: str) -> str:
+    path = controller._db.settings.rel_path(system_configuration).parent / _FINGERPRINT_FILENAME
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def _built_fingerprint_path(system_configuration: str) -> Path | None:
+    storage = StorageJSON.load(resolve_storage_path(system_configuration))
+    if storage is None or not storage.build_path or not storage.firmware_bin_path:
+        return None
+    if not Path(storage.firmware_bin_path).is_file():
+        return None
+    return Path(storage.build_path) / _FINGERPRINT_FILENAME
+
+
+def _store_built_fingerprint(system_configuration: str, fingerprint: str) -> None:
+    path = _built_fingerprint_path(system_configuration)
+    if path is not None:
+        path.write_text(f"{fingerprint}\n", encoding="utf-8")
+
+
+def _built_elf_sha256(system_configuration: str) -> str:
+    end = _APP_DESC_OFFSET + _APP_DESC_ELF_SHA256 + _SHA256_SIZE
+    with _firmware_bin(resolve_storage_path(system_configuration)).open("rb") as image:
+        head = image.read(end)
+    if len(head) < end or int.from_bytes(head[_APP_DESC_OFFSET : _APP_DESC_OFFSET + 4], "little") != (
+        _APP_DESC_MAGIC
+    ):
+        return ""
+    return head[_APP_DESC_OFFSET + _APP_DESC_ELF_SHA256 : end].hex()
+
+
+def _system_unchanged(
+    controller: FirmwareController, job: FirmwareJob, system: OtaSystem, device_elf: str
+) -> bool:
+    if device_elf:
+        try:
+            return device_elf == _built_elf_sha256(system.configuration)
+        except (OSError, ValueError):
+            return False
+    built = built_fingerprint(system.configuration)
+    devices = controller._db.devices
+    flashed = devices.ota_system_fingerprint(job.configuration) if devices is not None else None
+    return bool(built) and flashed == built
+
+
+async def _remember_flashed_system(
+    controller: FirmwareController,
+    job: FirmwareJob,
+    system: OtaSystem,
+    result: tuple[int, bool, bool],
+) -> None:
+    if result[0] != 0 or result[1]:
+        return
+    built = await run_in_executor(built_fingerprint, system.configuration)
+    devices = controller._db.devices
+    if built and devices is not None:
+        devices.set_ota_system_fingerprint(job.configuration, built)
 
 
 async def _sequence(
