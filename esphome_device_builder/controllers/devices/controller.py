@@ -240,6 +240,8 @@ class DevicesController(  # noqa: PLR0904 (grandfathered; new public methods nee
             on_resolved_addresses_cleared=self._on_resolved_addresses_cleared,
             on_deployed_identity_live_change=self._on_deployed_identity_live_change,
             on_ota_signed_change=self._on_ota_signed_change,
+            chip_revision_wanted=self._chip_revision_wanted,
+            on_chip_revision=self._on_chip_revision,
         )
         # Per-signal freshness tracker (mDNS / ping / MQTT last-seen,
         # ping RTT) feeding the device drawer's Reachability section.
@@ -376,6 +378,14 @@ class DevicesController(  # noqa: PLR0904 (grandfathered; new public methods nee
     def get_by_configuration(self, configuration: str) -> Device | None:
         """Return the configured device for YAML filename *configuration*, or ``None``."""
         return self._scanner.get_by_configuration(configuration)
+
+    def chip_revision(self, configuration: str) -> int | None:
+        value = self._metadata_store.get_field(configuration, "chip_revision")
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    def set_chip_revision(self, configuration: str, revision: int) -> None:
+        if self.chip_revision(configuration) != revision:
+            self._metadata_store.set_field(configuration, "chip_revision", revision)
 
     def probe_reachability_if_unknown(self, configuration: str) -> None:
         """
@@ -590,6 +600,16 @@ class DevicesController(  # noqa: PLR0904 (grandfathered; new public methods nee
         return await mutations_simple.set_labels(
             self, configuration=configuration, label_ids=label_ids
         )
+
+    @api_command("devices/set_chip_revision")
+    async def set_chip_revision_command(
+        self, *, configuration: str, revision: int, **kwargs: Any
+    ) -> None:
+        if self.get_by_configuration(configuration) is None:
+            raise CommandError(ErrorCode.NOT_FOUND, f"Unknown device: {configuration}")
+        if isinstance(revision, bool) or not isinstance(revision, int) or not 0 <= revision <= 9999:
+            raise CommandError(ErrorCode.INVALID_ARGS, "revision must be major * 100 + minor")
+        self.set_chip_revision(configuration, revision)
 
     @api_command("devices/set_labels_bulk")
     async def set_labels_bulk(
@@ -1305,6 +1325,13 @@ class DevicesController(  # noqa: PLR0904 (grandfathered; new public methods nee
 
     def _on_mac_address_change(self, name: str, mac: str) -> None:
         state_callbacks.on_mac_address_change(self, name, mac)
+
+    def _chip_revision_wanted(self, configuration: str) -> bool:
+        return self.chip_revision(configuration) is None
+
+    def _on_chip_revision(self, name: str, revision: int) -> None:
+        for device in self._devices_by_name(name):
+            self.set_chip_revision(device.configuration, revision)
 
     def _on_api_encryption_change(self, name: str, encryption: str) -> None:
         state_callbacks.on_api_encryption_change(self, name, encryption)

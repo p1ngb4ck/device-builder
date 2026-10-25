@@ -178,6 +178,8 @@ class DeviceStateMonitor(TaskControllerBase):
         on_resolved_addresses_cleared: ResolvedAddressesClearedCallback | None = None,
         on_deployed_identity_live_change: DeployedIdentityLiveCallback | None = None,
         on_ota_signed_change: OtaSignedChangeCallback | None = None,
+        chip_revision_wanted: Callable[[str], bool] | None = None,
+        on_chip_revision: Callable[[str, int], None] | None = None,
     ) -> None:
         super().__init__()
         self._get_devices = get_devices
@@ -206,6 +208,8 @@ class DeviceStateMonitor(TaskControllerBase):
         self._on_resolved_addresses_cleared = on_resolved_addresses_cleared
         self._on_deployed_identity_live_change = on_deployed_identity_live_change
         self._on_ota_signed_change = on_ota_signed_change
+        self._chip_revision_wanted = chip_revision_wanted
+        self._on_chip_revision = on_chip_revision
         self.state = MonitorState(reachability=reachability)
         self._ping_task: asyncio.Task | None = None
         self._api_info_task: asyncio.Task | None = None
@@ -531,6 +535,13 @@ class DeviceStateMonitor(TaskControllerBase):
         return self._apply_observation(
             name, "deployed_config_hash", config_hash, forward, name, config_hash
         )
+
+    def chip_revision_wanted(self, configuration: str) -> bool:
+        return self._chip_revision_wanted is not None and self._chip_revision_wanted(configuration)
+
+    def apply_chip_revision(self, name: str, revision: int) -> None:
+        if self._on_chip_revision is not None:
+            self._on_chip_revision(name, revision)
 
     def apply_mac_address(self, name: str, mac: str) -> bool:
         """

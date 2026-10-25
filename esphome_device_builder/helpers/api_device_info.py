@@ -20,9 +20,10 @@ from .json import JSONDecodeError, dumps_str, loads
 # Connect + device_info round-trip budget; the parent enforces its own
 # (larger) subprocess timeout as a backstop.
 _CONNECT_TIMEOUT = 10.0
+_CHIP_REVISION_ACTION = "chip_revision"
 
 
-async def _fetch(request: dict[str, Any]) -> dict[str, str]:
+async def _fetch(request: dict[str, Any]) -> dict[str, Any]:
     # Import inside the try-wrapped path (not module top) so an import-time
     # failure of aioesphomeapi / a transitive dep is caught by main() and
     # reported via the ``{"error": ...}`` channel rather than dying silently
@@ -37,18 +38,39 @@ async def _fetch(request: dict[str, Any]) -> dict[str, str]:
         noise_psk=request.get("noise_psk") or None,
         addresses=request.get("addresses") or None,
     )
+    revision = None
     try:
         await client.connect(login=False)
         info = await client.device_info()
+        if request.get("chip_revision"):
+            revision = await _chip_revision(client)
     finally:
         # ``disconnect`` on an unconnected client is a no-op, so it's safe even
         # when ``connect`` itself raised.
         await client.disconnect(force=True)
-    return {
+    result: dict[str, Any] = {
         "name": info.name or "",
         "mac_address": info.mac_address or "",
         "esphome_version": info.esphome_version or "",
     }
+    if revision is not None:
+        result["chip_revision"] = revision
+    return result
+
+
+async def _chip_revision(client: Any) -> int | None:
+    try:
+        _, services = await client.list_entities_services()
+        service = next((s for s in services if s.name == _CHIP_REVISION_ACTION), None)
+        if service is None:
+            return None
+        response = await client.execute_service(service, {}, return_response=True)
+        if response is None or not response.success or not response.response_data:
+            return None
+        revision = loads(response.response_data).get("revision")
+    except Exception:
+        return None
+    return revision if isinstance(revision, int) and not isinstance(revision, bool) else None
 
 
 def main() -> int:

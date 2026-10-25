@@ -100,6 +100,7 @@ async def build_probe_request(
             "port": port,
             "noise_psk": noise_psk,
             "addresses": addresses,
+            "chip_revision": monitor.chip_revision_wanted(device.configuration),
         }
     )
 
@@ -121,6 +122,9 @@ def apply_worker_info(monitor: DeviceStateMonitor, name: str, info: dict[str, An
     filled_version = monitor.apply_version(name, version)
     if mac or version:
         monitor.apply_deployed_identity_live(name, live=True)
+    revision = info.get("chip_revision")
+    if isinstance(revision, int) and not isinstance(revision, bool):
+        monitor.apply_chip_revision(name, revision)
     return filled_mac or filled_version
 
 

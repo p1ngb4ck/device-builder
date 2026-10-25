@@ -34,6 +34,7 @@ STORE_FIELDS: frozenset[str] = frozenset(
         "network",
         "queued_update",
         "api_encryption_active",
+        "chip_revision",
         "expected_config_hash",
         "regen_config_hash",
         "regen_content_fingerprint",

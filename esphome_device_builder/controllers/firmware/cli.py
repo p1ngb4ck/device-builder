@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     from .controller import FirmwareController
 
 _LOGGER = logging.getLogger(__name__)
+_REVISION_RE = re.compile(r"\(revision v(\d+)\.(\d+)\)")
 
 
 # ``esphome compile --skip-bootloader`` first shipped in this release line.
@@ -207,4 +209,8 @@ async def verify_chip(controller: FirmwareController, job: FirmwareJob) -> None:
         )
         raise ValueError(msg)
 
+    if (match := _REVISION_RE.search(output)) is not None and (
+        devices := controller._db.devices
+    ) is not None:
+        devices.set_chip_revision(job.configuration, int(match[1]) * 100 + int(match[2]))
     _LOGGER.debug("Chip verified: %s on %s", detected, job.port)
