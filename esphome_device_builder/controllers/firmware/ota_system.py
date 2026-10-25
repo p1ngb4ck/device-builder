@@ -113,6 +113,22 @@ async def detect(controller: FirmwareController, configuration: str) -> OtaSyste
     return parse_ota_system(content, configuration)
 
 
+async def enqueue_compile_chain(
+    controller: FirmwareController,
+    *,
+    configuration: str,
+    system: OtaSystem,
+    force_local: bool = False,
+) -> FirmwareJob:
+    main_compile, system_compile = await _create_compiles(
+        controller, configuration, system, skip_bootloader=False, force_local=force_local
+    )
+    await factories.commit_chain(
+        controller, main_compile, system_compile, supersede_configuration=configuration
+    )
+    return main_compile
+
+
 async def enqueue_install_chain(
     controller: FirmwareController,
     *,
@@ -121,8 +137,32 @@ async def enqueue_install_chain(
     system: OtaSystem,
     force_local: bool = False,
 ) -> FirmwareJob:
+    main_compile, system_compile = await _create_compiles(
+        controller,
+        configuration,
+        system,
+        skip_bootloader=factories._is_ota_app_flash(port, flash_bootloader=False),
+        force_local=force_local,
+    )
+    upload = factories.create_job(
+        controller, configuration, JobType.UPLOAD, port=port, depends_on=system_compile.job_id
+    )
+    upload.ota_system = system.configuration
+    await factories.commit_chain(
+        controller, main_compile, system_compile, upload, supersede_configuration=configuration
+    )
+    return main_compile
+
+
+async def _create_compiles(
+    controller: FirmwareController,
+    configuration: str,
+    system: OtaSystem,
+    *,
+    skip_bootloader: bool,
+    force_local: bool,
+) -> tuple[FirmwareJob, FirmwareJob]:
     await _generate_system(controller, configuration)
-    skip_bootloader = factories._is_ota_app_flash(port, flash_bootloader=False)
     main_compile = factories.create_job(
         controller,
         configuration,
@@ -138,14 +178,7 @@ async def enqueue_install_chain(
         depends_on=main_compile.job_id,
         skip_bootloader=skip_bootloader,
     )
-    upload = factories.create_job(
-        controller, configuration, JobType.UPLOAD, port=port, depends_on=system_compile.job_id
-    )
-    upload.ota_system = system.configuration
-    await factories.commit_chain(
-        controller, main_compile, system_compile, upload, supersede_configuration=configuration
-    )
-    return main_compile
+    return main_compile, system_compile
 
 
 async def enqueue_queued_upload(controller: FirmwareController, job: FirmwareJob) -> None:

@@ -246,6 +246,10 @@ async def enqueue_compile(
     force_local: bool = False,
 ) -> FirmwareJob:
     """Enqueue one COMPILE job with build-scheduler routing; the single/bulk shared core."""
+    if system := await ota_system.detect(controller, configuration):
+        return await ota_system.enqueue_compile_chain(
+            controller, configuration=configuration, system=system, force_local=force_local
+        )
     build_source = controller._resolve_install_source(force_local=force_local)
     job = create_job(controller, configuration, JobType.COMPILE, build_source=build_source)
     return await controller._enqueue(job)
