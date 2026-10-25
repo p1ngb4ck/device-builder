@@ -84,6 +84,8 @@ def create_job(
         device_name=device_name,
         device_friendly_name=device_friendly_name,
         chip_revision=_stored_chip_revision(controller, configuration, job_type),
+        flash_id=_stored_flash(controller, configuration, job_type)[0],
+        flash_max_frequency=_stored_flash(controller, configuration, job_type)[1],
         target_esphome_version=target_esphome_version,
     )
     job.apply_build_source(build_source)
@@ -250,8 +252,17 @@ def _stored_chip_revision(
     return devices.chip_revision(configuration)
 
 
+def _stored_flash(
+    controller: FirmwareController, configuration: str, job_type: JobType
+) -> tuple[str, str]:
+    devices = controller._db.devices
+    if devices is None or job_type not in (JobType.COMPILE, JobType.INSTALL, JobType.UPLOAD):
+        return "", ""
+    return devices.flash_id(configuration), devices.flash_max_frequency(configuration)
+
+
 def mark_chip_probe(job: FirmwareJob, port: str) -> None:
-    if job.chip_revision is None and port.startswith("/dev"):
+    if (job.chip_revision is None or not job.flash_id) and port.startswith("/dev"):
         job.chip_probe_port = port
 
 

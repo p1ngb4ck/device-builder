@@ -313,6 +313,44 @@ async def _ota_upload(
     return 0, False, False
 
 
+def schedule_flash_check(controller: FirmwareController, job: FirmwareJob) -> None:
+    controller._db.create_background_task(_flash_check(controller, job))
+
+
+async def _flash_check(controller: FirmwareController, job: FirmwareJob) -> None:
+    devices = controller._db.devices
+    if devices is None or not await run_in_executor(_is_esp32, job.configuration):
+        return
+    expect = await run_in_executor(_image_elf_sha256, job.configuration)
+    state = await _system_worker(
+        controller,
+        job,
+        mode="flash_check",
+        expect_elf=expect,
+        checked=devices.flash_checked_frequencies(job.configuration),
+    )
+    if state.get("outcome") != "ok":
+        return
+    if isinstance(flash_id := state.get("flash_id"), str) and flash_id:
+        devices.set_flash_id(job.configuration, flash_id)
+    frequency = state.get("frequency")
+    verified = state.get("verified")
+    if not isinstance(frequency, str) or not isinstance(verified, bool):
+        return
+    devices.set_flash_check(job.configuration, frequency, ok=verified)
+    if not verified:
+        _LOGGER.warning(
+            "Flash check of %s failed at %s: its next builds limit the flash to 40MHZ",
+            job.configuration,
+            frequency,
+        )
+
+
+def _is_esp32(configuration: str) -> bool:
+    storage = StorageJSON.load(resolve_storage_path(configuration))
+    return storage is not None and (storage.target_platform or "").upper().startswith("ESP32")
+
+
 def built_fingerprint(system_configuration: str) -> str:
     return _read_marker(_built_fingerprint_path(system_configuration))
 
@@ -412,7 +450,12 @@ async def _reboot_to_system(controller: FirmwareController, job: FirmwareJob) ->
 
 
 async def _system_worker(
-    controller: FirmwareController, job: FirmwareJob, *, mode: str, expect_elf: str = ""
+    controller: FirmwareController,
+    job: FirmwareJob,
+    *,
+    mode: str,
+    expect_elf: str = "",
+    checked: list[str] | None = None,
 ) -> dict[str, Any]:
     devices = controller._db.devices
     device = devices.get_by_configuration(job.configuration) if devices is not None else None
@@ -436,6 +479,7 @@ async def _system_worker(
             "addresses": addresses,
             "mode": mode,
             "expect_elf": expect_elf,
+            "checked": checked or [],
         }
     )
     try:

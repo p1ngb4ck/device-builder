@@ -54,6 +54,8 @@ class SubmitJobFrameData(TypedDict):
     skip_bootloader: NotRequired[bool]
     ota_system: NotRequired[bool]
     chip_revision: NotRequired[int]
+    flash_id: NotRequired[str]
+    flash_max_frequency: NotRequired[str]
 
 
 class SubmitJobChunkFrameData(TypedDict):

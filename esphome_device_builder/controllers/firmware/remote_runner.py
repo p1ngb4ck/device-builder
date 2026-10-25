@@ -454,6 +454,8 @@ async def _submit_job_to_receiver(
             skip_bootloader=job.skip_bootloader,
             ota_system=bool(job.ota_system),
             chip_revision=job.chip_revision,
+            flash_id=job.flash_id,
+            flash_max_frequency=job.flash_max_frequency,
         )
     except _PEER_LINK_ACKED_REQUEST_ERRORS as exc:
         _fail_locally(controller, job, reason=f"dispatch failed: {exc}")

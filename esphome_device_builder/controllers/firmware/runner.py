@@ -209,6 +209,13 @@ async def execute_job(  # noqa: PLR0915, PLR0912, C901
             if success and job.job_type is JobType.RESET_BUILD_ENV:
                 await _clean_provisioned_venvs(controller)
 
+            if (
+                success
+                and job.job_type in (JobType.UPLOAD, JobType.INSTALL)
+                and not job.flash_bootloader
+            ):
+                ota_system.schedule_flash_check(controller, job)
+
             # ``_finalize_terminal`` runs the mark + slot-
             # release + fire sequence in the order the
             # ``queue_status`` broadcaster needs (see helper

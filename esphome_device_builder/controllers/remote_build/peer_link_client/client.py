@@ -314,6 +314,8 @@ class PeerLinkClient:
         skip_bootloader: bool = False,
         ota_system: bool = False,
         chip_revision: int | None = None,
+        flash_id: str = "",
+        flash_max_frequency: str = "",
     ) -> SubmitJobAckFrameData:
         return await _submit.submit_job(
             self,
@@ -327,6 +329,8 @@ class PeerLinkClient:
             skip_bootloader=skip_bootloader,
             ota_system=ota_system,
             chip_revision=chip_revision,
+            flash_id=flash_id,
+            flash_max_frequency=flash_max_frequency,
         )
 
     async def cancel_job(self, *, job_id: str) -> bool:

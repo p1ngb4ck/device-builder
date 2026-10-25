@@ -30,7 +30,10 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 _REVISION_RE = re.compile(r"\(revision v(\d+)\.(\d+)\)")
+_FLASH_RE = re.compile(r"Manufacturer:\s*([0-9a-fA-F]{2})\s+Device:\s*([0-9a-fA-F]{4})")
 CHIP_REVISION_ENV = "ESPHOME_CHIP_REVISION"
+FLASH_ID_ENV = "ESPHOME_FLASH_ID"
+FLASH_MAX_FREQUENCY_ENV = "ESPHOME_FLASH_MAX_FREQUENCY"
 
 
 # ``esphome compile --skip-bootloader`` first shipped in this release line.
@@ -63,6 +66,10 @@ def compose_subprocess_env(job: FirmwareJob) -> dict[str, str]:
         env["ESPHOME_DATA_DIR"] = str(CORE.data_dir)
     if job.chip_revision is not None:
         env[CHIP_REVISION_ENV] = str(job.chip_revision)
+    if job.flash_id:
+        env[FLASH_ID_ENV] = job.flash_id
+    if job.flash_max_frequency:
+        env[FLASH_MAX_FREQUENCY_ENV] = job.flash_max_frequency
     return env
 
 
@@ -204,19 +211,25 @@ async def verify_chip(controller: FirmwareController, job: FirmwareJob) -> None:
         devices := controller._db.devices
     ) is not None:
         devices.set_chip_revision(job.configuration, int(match[1]) * 100 + int(match[2]))
+    if (flash := _FLASH_RE.search(output)) is not None and (devices := controller._db.devices) is not None:
+        devices.set_flash_id(job.configuration, f"{flash[1]}{flash[2]}".lower())
     _LOGGER.debug("Chip verified: %s on %s", detected, job.port)
 
 
 async def probe_chip_revision(controller: FirmwareController, job: FirmwareJob) -> None:
-    if not job.chip_probe_port or job.chip_revision is not None:
+    if not job.chip_probe_port or (job.chip_revision is not None and job.flash_id):
         return
     output = await _chip_id_output(controller, job, job.chip_probe_port)
     lifecycle.raise_if_cancelled(controller, job, "chip revision")
-    if (match := _REVISION_RE.search(output)) is None:
-        return
-    job.chip_revision = int(match[1]) * 100 + int(match[2])
-    if (devices := controller._db.devices) is not None:
-        devices.set_chip_revision(job.configuration, job.chip_revision)
+    devices = controller._db.devices
+    if job.chip_revision is None and (match := _REVISION_RE.search(output)) is not None:
+        job.chip_revision = int(match[1]) * 100 + int(match[2])
+        if devices is not None:
+            devices.set_chip_revision(job.configuration, job.chip_revision)
+    if not job.flash_id and (flash := _FLASH_RE.search(output)) is not None:
+        job.flash_id = f"{flash[1]}{flash[2]}".lower()
+        if devices is not None:
+            devices.set_flash_id(job.configuration, job.flash_id)
 
 
 async def _chip_id_output(controller: FirmwareController, job: FirmwareJob, port: str) -> str:
@@ -225,7 +238,7 @@ async def _chip_id_output(controller: FirmwareController, job: FirmwareJob, port
         *find_esptool_cmd(),
         "--port",
         port,
-        "chip-id",
+        "flash-id",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,

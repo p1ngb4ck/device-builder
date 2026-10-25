@@ -166,6 +166,12 @@ def _coerce_chip_revision(value: Any) -> int | None:
     return value
 
 
+def _coerce_flash_field(value: Any) -> str:
+    if not isinstance(value, str) or len(value) > 16 or not value.isalnum():
+        return ""
+    return value
+
+
 def _validate_configuration_filename(filename: str) -> str | None:
     r"""
     Return the device-name segment if *filename* is a safe leaf YAML, else ``None``.
@@ -225,6 +231,8 @@ class _PendingSubmit:
     skip_bootloader: bool = False
     ota_system: bool = False
     chip_revision: int | None = None
+    flash_id: str = ""
+    flash_max_frequency: str = ""
 
 
 class SubmitJobReceiver:
@@ -382,6 +390,8 @@ class SubmitJobReceiver:
             skip_bootloader=frame.get("skip_bootloader") is True,
             ota_system=frame.get("ota_system") is True,
             chip_revision=_coerce_chip_revision(frame.get("chip_revision")),
+            flash_id=_coerce_flash_field(frame.get("flash_id")),
+            flash_max_frequency=_coerce_flash_field(frame.get("flash_max_frequency")),
         )
 
     async def handle_submit_job_chunk(

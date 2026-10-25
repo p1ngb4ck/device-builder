@@ -197,6 +197,8 @@ class FirmwareJob(DashboardModel):
     skip_bootloader: bool = False
     chip_revision: int | None = None
     chip_probe_port: str = ""
+    flash_id: str = ""
+    flash_max_frequency: str = ""
     # In-memory decision input for the deferred-install completion hook;
     # the durable arm is ``Device.runtime_state.queued_update``.
     is_deferred_install: bool = False

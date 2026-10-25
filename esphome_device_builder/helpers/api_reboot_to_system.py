@@ -12,6 +12,8 @@ _ACTION = "reboot_to_ota_system"
 _SYSTEM_MARKER = "ota_system_running"
 _ELF_ACTION = "ota_system_elf"
 _MAIN_ACTION = "reboot_to_main"
+_FLASH_INFO_ACTION = "flash_info"
+_FLASH_VERIFY_ACTION = "flash_verify"
 _CONNECT_TIMEOUT = 10.0
 _REBOOT_TIMEOUT = 20.0
 _SYSTEM_TIMEOUT = 180.0
@@ -103,6 +105,58 @@ async def _reboot_main(request: dict[str, Any]) -> dict[str, str]:
         await client.disconnect(force=True)
 
 
+async def _answer(client: APIClient, service: Any) -> dict[str, Any] | None:
+    response = await client.execute_service(service, {}, return_response=True)
+    if response is None or not response.success or not response.response_data:
+        return None
+    answer = loads(response.response_data)
+    return answer if isinstance(answer, dict) else None
+
+
+async def _flash_state(request: dict[str, Any]) -> dict[str, Any] | None:
+    client = _client(request)
+    try:
+        await asyncio.wait_for(client.connect(login=False), _CONNECT_TIMEOUT)
+        _, services = await client.list_entities_services()
+        by_name = {s.name: s for s in services}
+        if _SYSTEM_MARKER in by_name:
+            return None
+        expect = request.get("expect_elf") or ""
+        if expect and _ELF_ACTION in by_name:
+            elf = await _answer(client, by_name[_ELF_ACTION])
+            if elf is None or elf.get("main_elf_sha256") != expect:
+                return None
+        if _FLASH_INFO_ACTION not in by_name:
+            return {"outcome": "no_action"}
+        info = await _answer(client, by_name[_FLASH_INFO_ACTION])
+        if info is None:
+            return {"outcome": "no_answer"}
+        result: dict[str, Any] = {
+            "outcome": "ok",
+            "flash_id": str(info.get("id") or ""),
+            "frequency": str(info.get("frequency") or ""),
+        }
+        if result["frequency"] not in (request.get("checked") or []) and _FLASH_VERIFY_ACTION in by_name:
+            verify = await _answer(client, by_name[_FLASH_VERIFY_ACTION])
+            if verify is not None:
+                result["verified"] = verify.get("ok") is True
+        return result
+    finally:
+        await client.disconnect(force=True)
+
+
+async def _flash_check(request: dict[str, Any]) -> dict[str, Any]:
+    deadline = asyncio.get_running_loop().time() + _SYSTEM_TIMEOUT
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            if (state := await _flash_state(request)) is not None:
+                return state
+        except Exception:
+            pass
+        await asyncio.sleep(_RETRY_DELAY)
+    return {"outcome": "not_up"}
+
+
 async def _reboot(request: dict[str, Any]) -> dict[str, str]:
     client = _client(request)
     stopped = asyncio.Event()
@@ -135,7 +189,12 @@ def main() -> int:
         sys.stdout.write(dumps_str({"error": f"bad request: {exc!r}"}))
         return 2
     try:
-        modes = {"query": _query, "wait": _wait, "reboot_main": _reboot_main}
+        modes = {
+            "query": _query,
+            "wait": _wait,
+            "reboot_main": _reboot_main,
+            "flash_check": _flash_check,
+        }
         mode = request.get("mode") or ("query" if request.get("query") else "reboot")
         result = asyncio.run(modes.get(mode, _reboot)(request))
     except Exception as exc:

@@ -98,6 +98,7 @@ if TYPE_CHECKING:
     from ...models import AdoptableDevice, BoardCatalogEntry
 
 _LOGGER = logging.getLogger(__name__)
+FLASH_SAFE_FREQUENCY = "40MHZ"
 
 # Keeps the fleet-wide build-tree walk out of the cold-start window
 # where store loads and job restore need the disk.
@@ -386,6 +387,31 @@ class DevicesController(  # noqa: PLR0904 (grandfathered; new public methods nee
     def set_chip_revision(self, configuration: str, revision: int) -> None:
         if self.chip_revision(configuration) != revision:
             self._metadata_store.set_field(configuration, "chip_revision", revision)
+
+    def flash_id(self, configuration: str) -> str:
+        value = self._metadata_store.get_field(configuration, "flash_id")
+        return value if isinstance(value, str) else ""
+
+    def set_flash_id(self, configuration: str, flash_id: str) -> None:
+        if self.flash_id(configuration) != flash_id:
+            self._metadata_store.set_field(configuration, "flash_id", flash_id)
+
+    def flash_checked_frequencies(self, configuration: str) -> list[str]:
+        fields = ("flash_checked_frequency", "flash_failed_frequency")
+        values = (self._metadata_store.get_field(configuration, field) for field in fields)
+        return [value for value in values if isinstance(value, str) and value]
+
+    def flash_max_frequency(self, configuration: str) -> str:
+        failed = self._metadata_store.get_field(configuration, "flash_failed_frequency")
+        return FLASH_SAFE_FREQUENCY if isinstance(failed, str) and failed else ""
+
+    def set_flash_check(self, configuration: str, frequency: str, *, ok: bool) -> None:
+        if ok:
+            self._metadata_store.set_field(configuration, "flash_checked_frequency", frequency)
+            if self._metadata_store.get_field(configuration, "flash_failed_frequency") == frequency:
+                self._metadata_store.set_field(configuration, "flash_failed_frequency", "")
+        else:
+            self._metadata_store.set_field(configuration, "flash_failed_frequency", frequency)
 
     def ota_system_fingerprint(self, configuration: str) -> str | None:
         value = self._metadata_store.get_field(configuration, "ota_system_fingerprint")

@@ -161,6 +161,8 @@ async def extract_and_queue(
             skip_bootloader=pending.skip_bootloader,
         )
         job.chip_revision = pending.chip_revision
+        job.flash_id = pending.flash_id
+        job.flash_max_frequency = pending.flash_max_frequency
         if pending.ota_system:
             from ...firmware.ota_system import system_configuration
 
