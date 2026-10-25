@@ -162,9 +162,29 @@ def _create_compile(
 
 
 async def enqueue_queued_upload(controller: FirmwareController, job: FirmwareJob) -> None:
-    if (system := await detect(controller, job.configuration)) is not None:
-        job.ota_system = system.configuration
-    await controller._enqueue(job)
+    if (system := await detect(controller, job.configuration)) is None:
+        await controller._enqueue(job)
+        return
+    await enqueue_upload_chain(controller, job, system)
+
+
+async def enqueue_upload_chain(
+    controller: FirmwareController, job: FirmwareJob, system: OtaSystem
+) -> FirmwareJob:
+    compile_job = _create_compile(
+        controller,
+        job.configuration,
+        system,
+        skip_bootloader=factories._is_ota_app_flash(job.port, flash_bootloader=False),
+        force_local=False,
+    )
+    factories.mark_chip_probe(compile_job, job.port)
+    job.ota_system = system.configuration
+    job.depends_on = compile_job.job_id
+    await factories.commit_chain(
+        controller, compile_job, job, supersede_configuration=job.configuration
+    )
+    return job
 
 
 async def run_compile(

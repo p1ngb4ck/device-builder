@@ -253,7 +253,7 @@ class FirmwareController:  # noqa: PLR0904 (grandfathered; new public methods ne
             configuration, JobType.UPLOAD, port=port, flash_bootloader=bootloader
         )
         if port and not bootloader and (system := await ota_system.detect(self, configuration)):
-            job.ota_system = system.configuration
+            return await ota_system.enqueue_upload_chain(self, job, system)
         return await self._enqueue(job)
 
     @api_command("firmware/clean")
