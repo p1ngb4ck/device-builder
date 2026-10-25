@@ -10,11 +10,11 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from esphome.core import CORE
 from esphome.storage_json import StorageJSON
 from esphome.upload_targets import PortType, get_port_type
 
 from ...helpers.async_ import run_in_executor
+from ...helpers.device_yaml import EsphomeConfigUnavailableError, run_esphome_config
 from ...helpers.device_yaml._tolerant_yaml import load_yaml_tolerant
 from ...helpers.json import JSONDecodeError, dumps, loads
 from ...helpers.storage_path import resolve_storage_path
@@ -70,6 +70,26 @@ def system_configuration(configuration: str) -> str:
     return (path.parent / path.stem / "ota" / _SYSTEM_FILENAME).as_posix()
 
 
+def is_system_configuration(configuration: str) -> bool:
+    path = Path(configuration)
+    return path.name == _SYSTEM_FILENAME and path.parent.name == "ota"
+
+
+def bundle_configuration(configuration: str) -> str:
+    if not is_system_configuration(configuration):
+        return configuration
+    device = Path(configuration).parent.parent
+    return (device.parent / f".{device.name}.{_SYSTEM_FILENAME}").as_posix()
+
+
+def stage_bundle_copy(controller: FirmwareController, configuration: str) -> str:
+    staged = bundle_configuration(configuration)
+    if staged != configuration:
+        source = controller._db.settings.rel_path(configuration)
+        controller._db.settings.rel_path(staged).write_bytes(source.read_bytes())
+    return staged
+
+
 def parse_ota_system(yaml_content: str, configuration: str) -> OtaSystem | None:
     config = load_yaml_tolerant(yaml_content)
     entries = config.get(_CONF_OTA) if isinstance(config, dict) else None
@@ -94,16 +114,27 @@ async def detect(controller: FirmwareController, configuration: str) -> OtaSyste
 
 
 async def enqueue_install_chain(
-    controller: FirmwareController, *, configuration: str, port: str, system: OtaSystem
+    controller: FirmwareController,
+    *,
+    configuration: str,
+    port: str,
+    system: OtaSystem,
+    force_local: bool = False,
 ) -> FirmwareJob:
+    await _generate_system(controller, configuration)
     skip_bootloader = factories._is_ota_app_flash(port, flash_bootloader=False)
     main_compile = factories.create_job(
-        controller, configuration, JobType.COMPILE, skip_bootloader=skip_bootloader
+        controller,
+        configuration,
+        JobType.COMPILE,
+        build_source=controller._resolve_install_source(force_local=force_local),
+        skip_bootloader=skip_bootloader,
     )
     system_compile = factories.create_job(
         controller,
         system.configuration,
         JobType.COMPILE,
+        build_source=controller._resolve_install_source(force_local=force_local),
         depends_on=main_compile.job_id,
         skip_bootloader=skip_bootloader,
     )
@@ -122,8 +153,13 @@ async def enqueue_queued_upload(controller: FirmwareController, job: FirmwareJob
     if system is None:
         await controller._enqueue(job)
         return
+    await _generate_system(controller, job.configuration)
     system_compile = factories.create_job(
-        controller, system.configuration, JobType.COMPILE, skip_bootloader=True
+        controller,
+        system.configuration,
+        JobType.COMPILE,
+        build_source=controller._resolve_install_source(),
+        skip_bootloader=True,
     )
     job.depends_on = system_compile.job_id
     job.ota_system = system.configuration
@@ -164,7 +200,7 @@ def build_factory_image(
     controller: FirmwareController, configuration: str, system: OtaSystem
 ) -> Path:
     main_bin = _firmware_bin(resolve_storage_path(configuration))
-    system_bin = _firmware_bin(_system_storage_path(controller, system))
+    system_bin = _firmware_bin(resolve_storage_path(system.configuration))
     factory = (system_bin.parent / _FACTORY_FILENAME).read_bytes()
     ota_0, otadata = _partitions(factory)
     if len(factory) > ota_0[0]:
@@ -215,12 +251,12 @@ def _firmware_bin(storage_path: Path) -> Path:
     return Path(storage.firmware_bin_path)
 
 
-def _system_storage_path(controller: FirmwareController, system: OtaSystem) -> Path:
-    system_path = controller._db.settings.rel_path(system.configuration)
-    data_dir = Path(CORE.data_dir)
-    if data_dir.resolve() == (Path(controller._db.settings.config_dir) / ".esphome").resolve():
-        data_dir = system_path.parent / ".esphome"
-    return data_dir / "storage" / f"{system_path.name}.json"
+async def _generate_system(controller: FirmwareController, configuration: str) -> None:
+    path = await run_in_executor(controller._db.settings.rel_path, configuration)
+    try:
+        await run_esphome_config(controller.state.esphome_cmd, path)
+    except EsphomeConfigUnavailableError as exc:
+        _LOGGER.warning("esphome config for %s did not run: %s", configuration, exc)
 
 
 async def _reboot_to_system(controller: FirmwareController, job: FirmwareJob) -> str:

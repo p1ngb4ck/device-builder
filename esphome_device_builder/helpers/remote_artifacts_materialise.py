@@ -151,7 +151,10 @@ def _open_and_extract_build_tree(tarball: bytes, configuration: str) -> _Extract
             receiver_build_path = _receiver_build_path_from_storage(receiver_storage)
             receiver_firmware_bin = receiver_storage.get("firmware_bin_path")
 
-            build_path = resolve_data_dir(configuration) / "build" / device_name
+            build_dir_name = receiver_build_path.name
+            if not _SAFE_DEVICE_NAME_RE.fullmatch(build_dir_name):
+                build_dir_name = device_name
+            build_path = resolve_data_dir(configuration) / "build" / build_dir_name
             # Stage the rewritten sidecar before deciding the wipe so
             # esphome's ``storage_should_clean`` sees the offloader-form
             # ``build_path`` instead of the receiver-absolute one it

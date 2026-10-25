@@ -63,7 +63,7 @@ from ..remote_build.peer_link_client import (
     SubmitJobSessionLostError,
     SubmitJobTimeoutError,
 )
-from . import lifecycle
+from . import lifecycle, ota_system
 from .bundle_phase import run_bundle_phase
 from .constants import ESPHOME_SUBPROCESS_ENV
 from .helpers import (
@@ -438,7 +438,7 @@ async def _submit_job_to_receiver(
     try:
         ack = await client.submit_job(
             job_id=job.job_id,
-            configuration_filename=job.configuration,
+            configuration_filename=ota_system.bundle_configuration(job.configuration),
             target=wire_target,
             bundle_bytes=bundle_bytes,
             device_name=device_name,

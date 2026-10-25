@@ -219,7 +219,11 @@ async def enqueue_install_or_defer(
         return await controller._enqueue(job)
     if not flash_bootloader and (system := await ota_system.detect(controller, configuration)):
         return await ota_system.enqueue_install_chain(
-            controller, configuration=configuration, port=port, system=system
+            controller,
+            configuration=configuration,
+            port=port,
+            system=system,
+            force_local=force_local,
         )
     if port == OTA_PORT and not flash_bootloader and controller._db.devices is not None:
         # A device still in the UNKNOWN startup window gets an immediate

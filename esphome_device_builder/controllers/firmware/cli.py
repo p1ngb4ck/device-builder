@@ -17,7 +17,7 @@ from ...helpers.sibling_cli import find_esptool_cmd
 from ...helpers.storage_path import resolve_storage_path
 from ...helpers.version_compat import release_line_at_least
 from ...models import OTA_PORT, FirmwareJob, JobType
-from . import lifecycle
+from . import lifecycle, ota_system
 from .constants import (
     _OTA_ADDRESS_CACHE_JOB_TYPES,
     ESPHOME_SUBPROCESS_ENV,
@@ -56,6 +56,8 @@ def compose_subprocess_env(job: FirmwareJob) -> dict[str, str]:
         # esphome's CORE.data_dir prefers is_ha_addon() over ESPHOME_DATA_DIR; an
         # add-on receiver would write artefacts to /data and ignore the override.
         env.pop("ESPHOME_IS_HA_ADDON", None)
+    elif job.ota_system or ota_system.is_system_configuration(job.configuration):
+        env["ESPHOME_DATA_DIR"] = str(CORE.data_dir)
     return env
 
 
