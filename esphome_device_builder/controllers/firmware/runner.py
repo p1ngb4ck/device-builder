@@ -20,7 +20,7 @@ from ...models import (
     JobStatus,
     JobType,
 )
-from . import cli, lifecycle, rename_flow
+from . import cli, lifecycle, ota_system, rename_flow
 from ._state import SpawnHandle
 from .constants import _ERROR_PATTERNS
 from .helpers import (
@@ -117,96 +117,54 @@ async def execute_job(  # noqa: PLR0915, PLR0912, C901
         # display, cache args — the old device is the flash target).
         target_configuration = job.flash_configuration
         effective_job_type = JobType.UPLOAD if job.is_rename_tail else job.job_type
-        # ``rel_path`` calls ``Path.resolve`` which does a sync
-        # ``os.path.realpath`` — blocking the event loop. Push it
-        # to the executor so the runner stays non-blocking
-        # end-to-end (matters even for the runner because
-        # ``bus.fire`` listeners are interleaved on the loop and
-        # blocking here pauses every follower's event delivery).
-        config_path = str(
-            await run_in_executor(controller._db.settings.rel_path, target_configuration)
-        )
         cache_args = controller._build_cache_args(job)
         esphome_cmd = await controller._resolve_esphome_cmd(job)
-        cmd = controller._build_command(
-            effective_job_type,
-            config_path,
-            job.port,
-            cache_args,
-            job.new_name,
-            flash_bootloader=job.flash_bootloader,
-            skip_bootloader=cli.effective_skip_bootloader(job),
-            esphome_cmd=esphome_cmd,
-        )
-        _LOGGER.debug("Running: %s", " ".join(cmd))
-
         env = controller._compose_subprocess_env(job)
-        has_error_in_output = False
-        # Captured at append time because the in-flight trim can
-        # elide the offending line before the post-exit handler
-        # runs. ``_check_error`` already had the line in hand
-        # there; persisting the verdict here lets the post-exit
-        # handler render a specific actionable message even
-        # after a long noisy build trims the head.
-        saw_no_esphome_module = False
 
-        def _check_error(text: str) -> None:
-            nonlocal has_error_in_output, saw_no_esphome_module
-            if ANSI_CSI_RE.sub("", text).lstrip().startswith("WARNING "):
-                return
-            if not saw_no_esphome_module and _is_no_module_named_esphome(text):
-                saw_no_esphome_module = True
-            if has_error_in_output:
-                return
-            for pattern in _ERROR_PATTERNS:
-                if pattern in text:
-                    has_error_in_output = True
-                    return
-
-        async with controller._tracked_subprocess(
-            job,
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            env=env,
-            # Put the whole esphome → platformio → gcc tree in its
-            # own process group so ``_terminate_job_process``
-            # can signal the entire chain, not just the python
-            # parent. Without this, killing the parent leaves the
-            # compiler children orphaned and the build keeps
-            # running until they finish on their own — exactly the
-            # "stop compile doesn't work" symptom.
-            start_new_session=True,
-        ) as proc:
-            # Honour a cancel that landed in the gap between
-            # ``_verify_chip`` finishing and ``create_subprocess_exec``
-            # returning — without this, an early Stop click during
-            # the brief async window where no subprocess was
-            # registered lets the install run to completion before the
-            # post-``proc.wait()`` cancel check sees the flag.
-            if job.job_id in controller.state.cancel_requested:
-                await controller._terminate_job_process(job)
-
-            # Shared with the source-routed remote runner
-            # (``remote_runner._on_output``). ``_ingest_output_line``
-            # buffers + trims + fires ``JOB_OUTPUT`` and advances
-            # ``JOB_PROGRESS`` on a parseable percentage — same
-            # per-line bookkeeping whether the build's bytes come
-            # from this CPU or a paired receiver. ``_check_error``
-            # stays inline because it mutates the nonlocal
-            # ``has_error_in_output`` / ``saw_no_esphome_module``
-            # flags the post-exit handler reads; remote builds
-            # surface a structured ``failed`` status from the
-            # receiver instead, so the stderr scrape only matters
-            # here.
-            def _on_line(line: str) -> None:
-                _ingest_output_line(job, controller._db.bus, line)
-                _check_error(line)
-
-            exit_code = await _pump_output_until_exit(
-                job.job_id, proc, _on_line, controller.state.cancel_requested
+        async def _run_step(
+            configuration: str, port: str, *, partition_table: bool = False, upload_file: str = ""
+        ) -> tuple[int, bool, bool]:
+            # ``rel_path`` calls ``Path.resolve`` which does a sync
+            # ``os.path.realpath`` — blocking the event loop. Push it
+            # to the executor so the runner stays non-blocking
+            # end-to-end (matters even for the runner because
+            # ``bus.fire`` listeners are interleaved on the loop and
+            # blocking here pauses every follower's event delivery).
+            config_path = str(
+                await run_in_executor(controller._db.settings.rel_path, configuration)
             )
-            job.exit_code = exit_code
+            step_cache_args = cache_args
+            if port != job.port:
+                devices = controller._db.devices
+                step_cache_args = (
+                    devices.get_ota_address_cache_args(job.configuration, port)
+                    if devices is not None
+                    else []
+                )
+            cmd = controller._build_command(
+                effective_job_type,
+                config_path,
+                port,
+                step_cache_args,
+                job.new_name,
+                flash_bootloader=job.flash_bootloader,
+                skip_bootloader=cli.effective_skip_bootloader(job),
+                esphome_cmd=esphome_cmd,
+                partition_table=partition_table,
+                upload_file=upload_file,
+            )
+            _LOGGER.debug("Running: %s", " ".join(cmd))
+            return await _run_command(controller, job, cmd, env)
+
+        if job.ota_system and job.job_type is JobType.UPLOAD:
+            exit_code, has_error_in_output, saw_no_esphome_module = await ota_system.run_upload(
+                controller, job, _run_step
+            )
+        else:
+            exit_code, has_error_in_output, saw_no_esphome_module = await _run_step(
+                target_configuration, job.port
+            )
+        job.exit_code = exit_code
 
         # If the user cancelled this job mid-run, the subprocess
         # exits non-zero (terminated by signal). Honour that
@@ -272,6 +230,77 @@ async def execute_job(  # noqa: PLR0915, PLR0912, C901
     finally:
         lane.active.pop(job.job_id, None)
         await lifecycle.end_run(controller, job)
+
+
+async def _run_command(
+    controller: FirmwareController, job: FirmwareJob, cmd: list[str], env: dict[str, str]
+) -> tuple[int, bool, bool]:
+    has_error_in_output = False
+    # Captured at append time because the in-flight trim can
+    # elide the offending line before the post-exit handler
+    # runs. ``_check_error`` already had the line in hand
+    # there; persisting the verdict here lets the post-exit
+    # handler render a specific actionable message even
+    # after a long noisy build trims the head.
+    saw_no_esphome_module = False
+
+    def _check_error(text: str) -> None:
+        nonlocal has_error_in_output, saw_no_esphome_module
+        if ANSI_CSI_RE.sub("", text).lstrip().startswith("WARNING "):
+            return
+        if not saw_no_esphome_module and _is_no_module_named_esphome(text):
+            saw_no_esphome_module = True
+        if has_error_in_output:
+            return
+        for pattern in _ERROR_PATTERNS:
+            if pattern in text:
+                has_error_in_output = True
+                return
+
+    async with controller._tracked_subprocess(
+        job,
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        env=env,
+        # Put the whole esphome → platformio → gcc tree in its
+        # own process group so ``_terminate_job_process``
+        # can signal the entire chain, not just the python
+        # parent. Without this, killing the parent leaves the
+        # compiler children orphaned and the build keeps
+        # running until they finish on their own — exactly the
+        # "stop compile doesn't work" symptom.
+        start_new_session=True,
+    ) as proc:
+        # Honour a cancel that landed in the gap between
+        # ``_verify_chip`` finishing and ``create_subprocess_exec``
+        # returning — without this, an early Stop click during
+        # the brief async window where no subprocess was
+        # registered lets the install run to completion before the
+        # post-``proc.wait()`` cancel check sees the flag.
+        if job.job_id in controller.state.cancel_requested:
+            await controller._terminate_job_process(job)
+
+        # Shared with the source-routed remote runner
+        # (``remote_runner._on_output``). ``_ingest_output_line``
+        # buffers + trims + fires ``JOB_OUTPUT`` and advances
+        # ``JOB_PROGRESS`` on a parseable percentage — same
+        # per-line bookkeeping whether the build's bytes come
+        # from this CPU or a paired receiver. ``_check_error``
+        # stays inline because it mutates the nonlocal
+        # ``has_error_in_output`` / ``saw_no_esphome_module``
+        # flags the post-exit handler reads; remote builds
+        # surface a structured ``failed`` status from the
+        # receiver instead, so the stderr scrape only matters
+        # here.
+        def _on_line(line: str) -> None:
+            _ingest_output_line(job, controller._db.bus, line)
+            _check_error(line)
+
+        exit_code = await _pump_output_until_exit(
+            job.job_id, proc, _on_line, controller.state.cancel_requested
+        )
+    return exit_code, has_error_in_output, saw_no_esphome_module
 
 
 async def execute_remote_job(controller: FirmwareController, job: FirmwareJob) -> None:

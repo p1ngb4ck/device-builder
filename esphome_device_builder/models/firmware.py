@@ -325,6 +325,7 @@ class FirmwareJob(DashboardModel):
     # :class:`JobFailureReason`), distinct from ``error`` (the human
     # message). ``PROVISION`` tells the offloader to rebuild locally.
     failure_reason: JobFailureReason = JobFailureReason.NONE
+    ota_system: str = ""
 
     @property
     def is_terminal(self) -> bool:

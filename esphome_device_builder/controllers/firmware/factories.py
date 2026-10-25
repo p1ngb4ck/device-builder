@@ -22,6 +22,7 @@ from ...models import (
     JobType,
 )
 from ...models.firmware import _now_iso
+from . import ota_system
 from .helpers import _fire_job_lifecycle, _names_touched_by_job, _target_is_offline
 
 if TYPE_CHECKING:
@@ -216,6 +217,10 @@ async def enqueue_install_or_defer(
         )
         job.is_deferred_install = True
         return await controller._enqueue(job)
+    if not flash_bootloader and (system := await ota_system.detect(controller, configuration)):
+        return await ota_system.enqueue_install_chain(
+            controller, configuration=configuration, port=port, system=system
+        )
     if port == OTA_PORT and not flash_bootloader and controller._db.devices is not None:
         # A device still in the UNKNOWN startup window gets an immediate
         # reachability probe, so the state has settled by the time the
@@ -245,8 +250,7 @@ async def enqueue_compile(
 async def commit_chain(
     controller: FirmwareController,
     head: FirmwareJob,
-    dependent: FirmwareJob | None = None,
-    *,
+    *dependents: FirmwareJob,
     supersede_configuration: str | None,
     lock_job: FirmwareJob | None = None,
     lock_exclude: frozenset[str] = frozenset(),
@@ -265,7 +269,7 @@ async def commit_chain(
     be overwritten. A dependent (unmet prerequisite) is held off its lane
     until the head lands it via ``release_dependents``.
     """
-    jobs = [dependent, head] if dependent is not None else [head]
+    jobs = [*reversed(dependents), head]
     try:
         check_rename_lock(controller, lock_job or head, exclude_job_ids=lock_exclude)
         if stage is not None:

@@ -48,6 +48,7 @@ from . import (
     follow,
     jobs,
     lifecycle,
+    ota_system,
     persistence,
     remote_dispatch,
     rename_flow,
@@ -137,7 +138,7 @@ class FirmwareController:  # noqa: PLR0904 (grandfathered; new public methods ne
         boundary/port validation ``upload()`` performs is tautological.
         """
         job = self._create_job(configuration, JobType.UPLOAD, port=OTA_PORT)
-        self._db.create_background_task(self._enqueue(job))
+        self._db.create_background_task(ota_system.enqueue_queued_upload(self, job))
 
     def _device_for_configuration(self, configuration: str) -> Any | None:
         """Resolve a Device by its configuration filename."""
@@ -633,6 +634,8 @@ class FirmwareController:  # noqa: PLR0904 (grandfathered; new public methods ne
         flash_bootloader: bool = False,
         skip_bootloader: bool = False,
         esphome_cmd: list[str] | None = None,
+        partition_table: bool = False,
+        upload_file: str = "",
     ) -> list[str]:
         return cli.build_command(
             esphome_cmd or self.state.esphome_cmd,
@@ -643,6 +646,8 @@ class FirmwareController:  # noqa: PLR0904 (grandfathered; new public methods ne
             new_name,
             flash_bootloader=flash_bootloader,
             skip_bootloader=skip_bootloader,
+            partition_table=partition_table,
+            upload_file=upload_file,
         )
 
     async def _resolve_esphome_cmd(self, job: FirmwareJob) -> list[str]:

@@ -69,6 +69,8 @@ def build_command(
     *,
     flash_bootloader: bool = False,
     skip_bootloader: bool = False,
+    partition_table: bool = False,
+    upload_file: str = "",
 ) -> list[str]:
     """Build the esphome CLI command for a given job type."""
     cmd_map = {
@@ -107,6 +109,10 @@ def build_command(
     if job_type == JobType.UPLOAD and flash_bootloader:
         # ``--bootloader`` exists only on the ``upload`` subparser (OTA-only).
         cmd.append("--bootloader")
+    if job_type == JobType.UPLOAD and partition_table:
+        cmd.append("--partition-table")
+    if job_type == JobType.UPLOAD and upload_file:
+        cmd.extend(["--file", upload_file])
     if job_type == JobType.COMPILE and skip_bootloader:
         # OTA app installs never flash the bootloader; esphome cleans
         # stale factory images itself when a tree flips into skip mode.
