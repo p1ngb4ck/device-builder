@@ -123,7 +123,12 @@ async def execute_job(  # noqa: PLR0915, PLR0912, C901
         env = controller._compose_subprocess_env(job)
 
         async def _run_step(
-            configuration: str, port: str, *, partition_table: bool = False, upload_file: str = ""
+            configuration: str,
+            port: str,
+            *,
+            partition_table: bool = False,
+            upload_file: str = "",
+            full_image: bool = False,
         ) -> tuple[int, bool, bool]:
             # ``rel_path`` calls ``Path.resolve`` which does a sync
             # ``os.path.realpath`` — blocking the event loop. Push it
@@ -149,7 +154,7 @@ async def execute_job(  # noqa: PLR0915, PLR0912, C901
                 step_cache_args,
                 job.new_name,
                 flash_bootloader=job.flash_bootloader,
-                skip_bootloader=cli.effective_skip_bootloader(job),
+                skip_bootloader=False if full_image else cli.effective_skip_bootloader(job),
                 esphome_cmd=esphome_cmd,
                 partition_table=partition_table,
                 upload_file=upload_file,

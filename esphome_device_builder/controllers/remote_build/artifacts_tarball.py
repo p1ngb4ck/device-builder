@@ -64,6 +64,7 @@ from ...constants import toolchain_artifacts
 from ...helpers.artifacts_tarball_members import (
     BUILD_INFO_MEMBER_NAME,
     IDEDATA_MEMBER_NAME,
+    MAIN_FINGERPRINT_NAME,
     OTA_SYSTEM_FINGERPRINT_NAME,
     OTA_SYSTEM_MEMBER_PREFIX,
     PLATFORMIO_INI_MEMBER_NAME,
@@ -157,6 +158,9 @@ def pack_build_artifacts(configuration: str, ota_system: str = "") -> PackedArti
         build_path=build_path,
     )
     if ota_system:
+        main_fingerprint = build_path / MAIN_FINGERPRINT_NAME
+        if main_fingerprint.is_file():
+            members.append((MAIN_FINGERPRINT_NAME, main_fingerprint))
         system_storage_path, system_storage = _load_storage_for_pack(ota_system)
         members += [
             (f"{OTA_SYSTEM_MEMBER_PREFIX}{arcname}", src)

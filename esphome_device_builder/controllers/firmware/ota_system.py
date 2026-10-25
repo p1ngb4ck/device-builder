@@ -49,6 +49,7 @@ _OTA_0_SEQ = 1
 _REBOOT_WORKER = "esphome_device_builder.helpers.api_reboot_to_system"
 _REBOOT_TIMEOUT = 300.0
 _FINGERPRINT_FILENAME = "ota_system.fingerprint"
+_MAIN_FINGERPRINT_FILENAME = "main.fingerprint"
 _APP_DESC_OFFSET = 32
 _APP_DESC_MAGIC = 0xABCD5432
 _APP_DESC_ELF_SHA256 = 144
@@ -208,14 +209,25 @@ async def run_compile(
     if fingerprint and fingerprint == await run_in_executor(built_fingerprint, job.ota_system):
         _emit(controller, job, "INFO OTA system unchanged: its build is kept")
     else:
-        result = await run(job.ota_system, job.port)
+        result = await run(job.ota_system, job.port, full_image=True)
         if result[0] != 0 or result[1]:
             return result
         if fingerprint:
             await run_in_executor(_store_built_fingerprint, job.ota_system, fingerprint)
         job.progress = 0
         job.ninja_total = 0
-    return await run(job.configuration, job.port)
+    main_fingerprint = await run_in_executor(
+        _written_fingerprint, controller, job.ota_system, _MAIN_FINGERPRINT_FILENAME
+    )
+    if main_fingerprint and main_fingerprint == await run_in_executor(
+        built_main_fingerprint, job.configuration
+    ):
+        _emit(controller, job, "INFO Main firmware unchanged: its build is kept")
+        return 0, False, False
+    result = await run(job.configuration, job.port)
+    if result[0] == 0 and not result[1] and main_fingerprint:
+        await run_in_executor(_store_built_main_fingerprint, job.configuration, main_fingerprint)
+    return result
 
 
 async def run_upload(
@@ -256,13 +268,11 @@ async def run_upload(
 
 
 def built_fingerprint(system_configuration: str) -> str:
-    path = _built_fingerprint_path(system_configuration)
-    if path is None:
-        return ""
-    try:
-        return path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
+    return _read_marker(_built_fingerprint_path(system_configuration))
+
+
+def built_main_fingerprint(configuration: str) -> str:
+    return _read_marker(_built_marker_path(configuration, _MAIN_FINGERPRINT_FILENAME, factory=False))
 
 
 def build_factory_image(configuration: str, system: OtaSystem) -> Path:
@@ -403,25 +413,45 @@ async def _system_worker(
     return parsed
 
 
-def _written_fingerprint(controller: FirmwareController, system_configuration: str) -> str:
-    path = controller._db.settings.rel_path(system_configuration).parent / _FINGERPRINT_FILENAME
+def _written_fingerprint(
+    controller: FirmwareController,
+    system_configuration: str,
+    filename: str = _FINGERPRINT_FILENAME,
+) -> str:
+    return _read_marker(controller._db.settings.rel_path(system_configuration).parent / filename)
+
+
+def _read_marker(path: Path | None) -> str:
+    if path is None:
+        return ""
     try:
         return path.read_text(encoding="utf-8").strip()
     except OSError:
         return ""
 
 
-def _built_fingerprint_path(system_configuration: str) -> Path | None:
-    storage = StorageJSON.load(resolve_storage_path(system_configuration))
+def _built_marker_path(configuration: str, filename: str, *, factory: bool) -> Path | None:
+    storage = StorageJSON.load(resolve_storage_path(configuration))
     if storage is None or not storage.build_path or not storage.firmware_bin_path:
         return None
-    if not Path(storage.firmware_bin_path).is_file():
+    firmware = Path(storage.firmware_bin_path)
+    if not firmware.is_file() or (factory and not firmware.with_name(_FACTORY_FILENAME).is_file()):
         return None
-    return Path(storage.build_path) / _FINGERPRINT_FILENAME
+    return Path(storage.build_path) / filename
+
+
+def _built_fingerprint_path(system_configuration: str) -> Path | None:
+    return _built_marker_path(system_configuration, _FINGERPRINT_FILENAME, factory=True)
 
 
 def _store_built_fingerprint(system_configuration: str, fingerprint: str) -> None:
     path = _built_fingerprint_path(system_configuration)
+    if path is not None:
+        path.write_text(f"{fingerprint}\n", encoding="utf-8")
+
+
+def _store_built_main_fingerprint(configuration: str, fingerprint: str) -> None:
+    path = _built_marker_path(configuration, _MAIN_FINGERPRINT_FILENAME, factory=False)
     if path is not None:
         path.write_text(f"{fingerprint}\n", encoding="utf-8")
 
