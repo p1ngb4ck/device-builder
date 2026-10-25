@@ -156,6 +156,10 @@ async def execute_job(  # noqa: PLR0915, PLR0912, C901
             _LOGGER.debug("Running: %s", " ".join(cmd))
             return await _run_command(controller, job, cmd, env)
 
+        if job.job_type is JobType.COMPILE and ota_system.is_system_configuration(
+            job.configuration
+        ):
+            await ota_system.generate_system(controller, job)
         if job.ota_system and job.job_type is JobType.UPLOAD:
             exit_code, has_error_in_output, saw_no_esphome_module = await ota_system.run_upload(
                 controller, job, _run_step

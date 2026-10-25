@@ -162,7 +162,6 @@ async def _create_compiles(
     skip_bootloader: bool,
     force_local: bool,
 ) -> tuple[FirmwareJob, FirmwareJob]:
-    await _generate_system(controller, configuration)
     main_compile = factories.create_job(
         controller,
         configuration,
@@ -186,7 +185,6 @@ async def enqueue_queued_upload(controller: FirmwareController, job: FirmwareJob
     if system is None:
         await controller._enqueue(job)
         return
-    await _generate_system(controller, job.configuration)
     system_compile = factories.create_job(
         controller,
         system.configuration,
@@ -282,6 +280,16 @@ def _firmware_bin(storage_path: Path) -> Path:
         msg = f"No build found ({storage_path})"
         raise ValueError(msg)
     return Path(storage.firmware_bin_path)
+
+
+def main_configuration(configuration: str) -> str:
+    device = Path(configuration).parent.parent
+    return (device.parent / f"{device.name}.yaml").as_posix()
+
+
+async def generate_system(controller: FirmwareController, job: FirmwareJob) -> None:
+    _emit(controller, job, "INFO Writing the OTA system configuration (esphome config)")
+    await _generate_system(controller, main_configuration(job.configuration))
 
 
 async def _generate_system(controller: FirmwareController, configuration: str) -> None:
