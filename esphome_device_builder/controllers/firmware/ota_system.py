@@ -120,13 +120,11 @@ async def enqueue_compile_chain(
     system: OtaSystem,
     force_local: bool = False,
 ) -> FirmwareJob:
-    main_compile, system_compile = await _create_compiles(
+    compile_job = _create_compile(
         controller, configuration, system, skip_bootloader=False, force_local=force_local
     )
-    await factories.commit_chain(
-        controller, main_compile, system_compile, supersede_configuration=configuration
-    )
-    return main_compile
+    await factories.commit_chain(controller, compile_job, supersede_configuration=configuration)
+    return compile_job
 
 
 async def enqueue_install_chain(
@@ -137,7 +135,7 @@ async def enqueue_install_chain(
     system: OtaSystem,
     force_local: bool = False,
 ) -> FirmwareJob:
-    main_compile, system_compile = await _create_compiles(
+    compile_job = _create_compile(
         controller,
         configuration,
         system,
@@ -145,39 +143,32 @@ async def enqueue_install_chain(
         force_local=force_local,
     )
     upload = factories.create_job(
-        controller, configuration, JobType.UPLOAD, port=port, depends_on=system_compile.job_id
+        controller, configuration, JobType.UPLOAD, port=port, depends_on=compile_job.job_id
     )
     upload.ota_system = system.configuration
     await factories.commit_chain(
-        controller, main_compile, system_compile, upload, supersede_configuration=configuration
+        controller, compile_job, upload, supersede_configuration=configuration
     )
-    return main_compile
+    return compile_job
 
 
-async def _create_compiles(
+def _create_compile(
     controller: FirmwareController,
     configuration: str,
     system: OtaSystem,
     *,
     skip_bootloader: bool,
     force_local: bool,
-) -> tuple[FirmwareJob, FirmwareJob]:
-    main_compile = factories.create_job(
+) -> FirmwareJob:
+    compile_job = factories.create_job(
         controller,
         configuration,
         JobType.COMPILE,
         build_source=controller._resolve_install_source(force_local=force_local),
         skip_bootloader=skip_bootloader,
     )
-    system_compile = factories.create_job(
-        controller,
-        system.configuration,
-        JobType.COMPILE,
-        build_source=controller._resolve_install_source(force_local=force_local),
-        depends_on=main_compile.job_id,
-        skip_bootloader=skip_bootloader,
-    )
-    return main_compile, system_compile
+    compile_job.ota_system = system.configuration
+    return compile_job
 
 
 async def enqueue_queued_upload(controller: FirmwareController, job: FirmwareJob) -> None:
@@ -197,6 +188,18 @@ async def enqueue_queued_upload(controller: FirmwareController, job: FirmwareJob
     await factories.commit_chain(
         controller, system_compile, job, supersede_configuration=job.configuration
     )
+
+
+async def run_compile(
+    controller: FirmwareController, job: FirmwareJob, run: RunStep
+) -> tuple[int, bool, bool]:
+    await generate_system(controller, job, job.ota_system)
+    result = await run(job.ota_system, job.port)
+    if result[0] != 0 or result[1]:
+        return result
+    job.progress = 0
+    job.ninja_total = 0
+    return await run(job.configuration, job.port)
 
 
 async def run_upload(
@@ -283,9 +286,11 @@ def main_configuration(configuration: str) -> str:
     return (device.parent / f"{device.name}.yaml").as_posix()
 
 
-async def generate_system(controller: FirmwareController, job: FirmwareJob) -> None:
+async def generate_system(
+    controller: FirmwareController, job: FirmwareJob, configuration: str
+) -> None:
     _emit(controller, job, "INFO Writing the OTA system configuration (esphome config)")
-    await _generate_system(controller, main_configuration(job.configuration))
+    await _generate_system(controller, main_configuration(configuration))
 
 
 async def _generate_system(controller: FirmwareController, configuration: str) -> None:

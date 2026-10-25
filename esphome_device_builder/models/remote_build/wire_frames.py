@@ -52,6 +52,7 @@ class SubmitJobFrameData(TypedDict):
     device_friendly_name: NotRequired[str]
     target_esphome_version: NotRequired[str]
     skip_bootloader: NotRequired[bool]
+    ota_system: NotRequired[bool]
 
 
 class SubmitJobChunkFrameData(TypedDict):

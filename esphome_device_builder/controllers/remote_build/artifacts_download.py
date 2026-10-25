@@ -258,7 +258,9 @@ class ArtifactsDownloadSender:
             return
 
         task = self._downloads.track(
-            self._run_download(session, job_id, firmware_job.configuration),
+            self._run_download(
+                session, job_id, firmware_job.configuration, firmware_job.ota_system
+            ),
             name=f"artifacts download {job_id}",
         )
         if task is None:
@@ -272,11 +274,11 @@ class ArtifactsDownloadSender:
         self._inflight[session.dashboard_id] = task
 
     async def _run_download(
-        self, session: PeerLinkSession, job_id: str, configuration: str
+        self, session: PeerLinkSession, job_id: str, configuration: str, ota_system: str
     ) -> None:
         """Pack and stream one download; every exit short of session loss sends a terminal frame."""
         try:
-            packed = await self._pack_or_reject(session, job_id, configuration)
+            packed = await self._pack_or_reject(session, job_id, configuration, ota_system)
             if packed is not None:
                 await self._send_stream(session, job_id, packed)
         except Exception as exc:
@@ -299,11 +301,11 @@ class ArtifactsDownloadSender:
                 del self._inflight[session.dashboard_id]
 
     async def _pack_or_reject(
-        self, session: PeerLinkSession, job_id: str, configuration: str
+        self, session: PeerLinkSession, job_id: str, configuration: str, ota_system: str
     ) -> PackedArtifacts | None:
         """Pack the build artifacts, sending the reject frame on failure."""
         try:
-            return await run_in_executor(pack_build_artifacts, configuration)
+            return await run_in_executor(pack_build_artifacts, configuration, ota_system)
         except FileNotFoundError as exc:
             # ``FileNotFoundError`` from
             # :func:`load_build_artifacts` carries the actual

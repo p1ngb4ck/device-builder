@@ -217,6 +217,7 @@ class _PendingSubmit:
     # The offloader's compile asked for --skip-bootloader; False for
     # older offloaders that don't send the (NotRequired) key.
     skip_bootloader: bool = False
+    ota_system: bool = False
 
 
 class SubmitJobReceiver:
@@ -372,6 +373,7 @@ class SubmitJobReceiver:
             # Strict: only a JSON true enables it; anything malformed keeps
             # the full artifact set.
             skip_bootloader=frame.get("skip_bootloader") is True,
+            ota_system=frame.get("ota_system") is True,
         )
 
     async def handle_submit_job_chunk(

@@ -30,7 +30,7 @@ async def run_bundle_phase(
     ticks while the bundle runs so a silent validator still shows liveness.
     """
     if ota_system.is_system_configuration(job.configuration):
-        await ota_system.generate_system(controller, job)
+        await ota_system.generate_system(controller, job, job.configuration)
     configuration = await run_in_executor(
         ota_system.stage_bundle_copy, controller, job.configuration
     )

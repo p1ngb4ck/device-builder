@@ -160,6 +160,10 @@ async def extract_and_queue(
             target_esphome_version=pending.target_esphome_version,
             skip_bootloader=pending.skip_bootloader,
         )
+        if pending.ota_system:
+            from ...firmware.ota_system import system_configuration
+
+            job.ota_system = system_configuration(configuration)
         await receiver._firmware._enqueue(job)
     except Exception as exc:
         _LOGGER.warning(

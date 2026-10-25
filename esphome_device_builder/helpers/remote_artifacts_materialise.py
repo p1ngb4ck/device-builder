@@ -35,6 +35,7 @@ from esphome.writer import storage_should_clean
 from ..constants import toolchain_artifacts
 from .artifacts_tarball_members import (
     IDEDATA_MEMBER_NAME,
+    OTA_SYSTEM_MEMBER_PREFIX,
     PLATFORMIO_INI_MEMBER_NAME,
     STORAGE_MEMBER_NAME,
 )
@@ -117,6 +118,39 @@ def materialise_remote_artifacts(tarball: bytes, configuration: str) -> Path:
             payload=payload,
         )
     return extracted.build_path
+
+
+def split_ota_system_artifacts(tarball: bytes) -> tuple[bytes, bytes]:
+    main = io.BytesIO()
+    system = io.BytesIO()
+    found = False
+    try:
+        with (
+            tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as tar,
+            tarfile.open(fileobj=main, mode="w:gz") as main_tar,
+            tarfile.open(fileobj=system, mode="w:gz") as system_tar,
+        ):
+            total = 0
+            for member in tar.getmembers():
+                payload, total = read_member(
+                    tar, member, total_so_far=total, error_cls=MaterialiseError
+                )
+                name = member.name
+                target = main_tar
+                if name.startswith(OTA_SYSTEM_MEMBER_PREFIX):
+                    name = name[len(OTA_SYSTEM_MEMBER_PREFIX) :]
+                    target = system_tar
+                    found = True
+                info = tarfile.TarInfo(name=name)
+                info.size = len(payload)
+                target.addfile(info, io.BytesIO(payload))
+    except tarfile.TarError as exc:
+        msg = f"artifacts tarball unreadable: {exc}"
+        raise MaterialiseError(msg) from exc
+    if not found:
+        msg = "the build server sent no OTA system build"
+        raise MaterialiseError(msg)
+    return main.getvalue(), system.getvalue()
 
 
 def _open_and_extract_build_tree(tarball: bytes, configuration: str) -> _ExtractedTarball:

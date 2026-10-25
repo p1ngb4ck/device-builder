@@ -43,6 +43,7 @@ from ...helpers.peer_link_bundle import BUNDLE_MAX_TOTAL_BYTES, BundleAssemblerE
 from ...helpers.remote_artifacts_materialise import (
     MaterialiseError,
     materialise_remote_artifacts,
+    split_ota_system_artifacts,
 )
 from ...models import (
     EventType,
@@ -449,6 +450,7 @@ async def _submit_job_to_receiver(
             target_esphome_version=_offloader_esphome_version,
             # The receiver gates this on the esphome it actually runs.
             skip_bootloader=job.skip_bootloader,
+            ota_system=bool(job.ota_system),
         )
     except _PEER_LINK_ACKED_REQUEST_ERRORS as exc:
         _fail_locally(controller, job, reason=f"dispatch failed: {exc}")
@@ -704,7 +706,13 @@ async def _fetch_and_materialise(
         return False
 
     try:
-        await run_in_executor(materialise_remote_artifacts, packed.tarball, job.configuration)
+        main_tarball = packed.tarball
+        if job.ota_system:
+            main_tarball, system_tarball = await run_in_executor(
+                split_ota_system_artifacts, packed.tarball
+            )
+            await run_in_executor(materialise_remote_artifacts, system_tarball, job.ota_system)
+        await run_in_executor(materialise_remote_artifacts, main_tarball, job.configuration)
     except MaterialiseError as exc:
         _fail_locally(controller, job, reason=f"materialise failed: {exc}")
         return False

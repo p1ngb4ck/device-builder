@@ -17,3 +17,4 @@ PLATFORMIO_INI_MEMBER_NAME = "platformio.ini"
 # Read by the offloader's ``read_build_info_hash`` to populate
 # ``expected_config_hash`` post-build (see #654).
 BUILD_INFO_MEMBER_NAME = "build_info.json"
+OTA_SYSTEM_MEMBER_PREFIX = "ota_system/"

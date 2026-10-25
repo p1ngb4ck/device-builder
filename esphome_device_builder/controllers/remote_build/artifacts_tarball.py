@@ -64,6 +64,7 @@ from ...constants import toolchain_artifacts
 from ...helpers.artifacts_tarball_members import (
     BUILD_INFO_MEMBER_NAME,
     IDEDATA_MEMBER_NAME,
+    OTA_SYSTEM_MEMBER_PREFIX,
     PLATFORMIO_INI_MEMBER_NAME,
     STORAGE_MEMBER_NAME,
 )
@@ -135,7 +136,7 @@ class PackedArtifacts:
     firmware_offset: str
 
 
-def pack_build_artifacts(configuration: str) -> PackedArtifacts:
+def pack_build_artifacts(configuration: str, ota_system: str = "") -> PackedArtifacts:
     """Pack the build for *configuration* into the materialise-locally tarball.
 
     Synchronous; meant to run inside an executor. Raises
@@ -154,6 +155,17 @@ def pack_build_artifacts(configuration: str) -> PackedArtifacts:
         storage_path=storage_path,
         build_path=build_path,
     )
+    if ota_system:
+        system_storage_path, system_storage = _load_storage_for_pack(ota_system)
+        members += [
+            (f"{OTA_SYSTEM_MEMBER_PREFIX}{arcname}", src)
+            for arcname, src in _collect_pack_members(
+                configuration=ota_system,
+                storage=system_storage,
+                storage_path=system_storage_path,
+                build_path=Path(system_storage.build_path),
+            )
+        ]
     firmware_offset = _firmware_offset_for_platform(storage.target_platform or "")
     tarball = _render_tarball(members, configuration=configuration)
     return PackedArtifacts(tarball=tarball, firmware_offset=firmware_offset)
