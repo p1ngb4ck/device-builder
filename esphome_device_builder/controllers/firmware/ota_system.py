@@ -58,7 +58,7 @@ _SYSTEM_CHANGED_WARNINGS = (
     "WARNING The OTA system changed, and the OTA system on the device cannot update itself.",
     "WARNING Flash the device via serial once: the full image with both systems.",
 )
-_NOTHING_TO_FLASH = "INFO Both systems are unchanged on the device: nothing to flash"
+_UNCHANGED_FLASH_MAIN = "INFO Both systems are unchanged on the device: the main firmware is flashed"
 _SYSTEM_PART_FILENAME = "firmware.ota_system.part.bin"
 _OTADATA_PART_FILENAME = "firmware.otadata.bin"
 _UPLOAD_SPEED_ENV = "ESPHOME_UPLOAD_SPEED"
@@ -235,8 +235,8 @@ async def _serial_upload(
     write_system = not built.system_fingerprint or flashed.system != built.system_fingerprint
     write_main = not built.main_fingerprint or flashed.main != built.main_fingerprint
     if not write_system and not write_main:
-        _emit(controller, job, _NOTHING_TO_FLASH)
-        return 0, False, False
+        _emit(controller, job, _UNCHANGED_FLASH_MAIN)
+        write_main = True
     parts = await run_in_executor(_serial_parts, job.configuration, system, write_system, write_main)
     for offset, path in parts:
         _emit(controller, job, f"INFO Serial flash: {path.name} at 0x{offset:X}")
@@ -280,8 +280,8 @@ async def _ota_upload(
         str(state.get("main_elf_sha256") or ""), built.main_elf, flashed.main, built.main_fingerprint
     )
     if not system_changed and not main_changed:
-        _emit(controller, job, _NOTHING_TO_FLASH)
-        return 0, False, False
+        _emit(controller, job, _UNCHANGED_FLASH_MAIN)
+        main_changed = True
     if not state.get("in_system"):
         outcome = await _reboot_to_system(controller, job)
         _emit(controller, job, f"INFO OTA system: {outcome}")
