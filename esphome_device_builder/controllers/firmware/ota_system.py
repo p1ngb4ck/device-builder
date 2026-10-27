@@ -43,6 +43,9 @@ _TYPE_APP = 0x00
 _TYPE_DATA = 0x01
 _SUBTYPE_OTA_0 = 0x10
 _SUBTYPE_OTADATA = 0x00
+_SUBTYPE_NVS = 0x02
+_NVS_LABEL = "nvs"
+_NVS_IMAGE_FILENAME = "nvs.bin"
 _OTADATA_SEQ = struct.Struct("<I")
 _OTADATA_CRC_OFFSET = 28
 _OTA_0_SEQ = 1
@@ -363,7 +366,7 @@ def build_factory_image(configuration: str, system: OtaSystem) -> Path:
     main_bin = _firmware_bin(resolve_storage_path(configuration))
     system_bin = _firmware_bin(resolve_storage_path(system.configuration))
     factory = (system_bin.parent / _FACTORY_FILENAME).read_bytes()
-    ota_0, otadata = _partitions(factory)
+    ota_0, otadata, nvs = _partitions(factory)
     if len(factory) > ota_0[0]:
         msg = f"OTA system image ({len(factory)} bytes) overlaps ota_0 at 0x{ota_0[0]:X}"
         raise ValueError(msg)
@@ -380,28 +383,44 @@ def build_factory_image(configuration: str, system: OtaSystem) -> Path:
     image[start : start + 4] = seq
     crc = binascii.crc32(seq, 0xFFFFFFFF) & 0xFFFFFFFF
     image[start + _OTADATA_CRC_OFFSET : start + _OTADATA_CRC_OFFSET + 4] = _OTADATA_SEQ.pack(crc)
+    nvs_image = main_bin.with_name(_NVS_IMAGE_FILENAME)
+    if nvs is not None and nvs_image.is_file():
+        defaults = nvs_image.read_bytes()
+        if len(defaults) > nvs[1]:
+            msg = f"NVS defaults ({len(defaults)} bytes) do not fit the nvs partition (0x{nvs[1]:X})"
+            raise ValueError(msg)
+        image[nvs[0] : nvs[0] + len(defaults)] = defaults
     target = system_bin.parent / _MERGED_FILENAME
     target.write_bytes(bytes(image))
     return target
 
 
-def _partitions(factory: bytes) -> tuple[tuple[int, int], tuple[int, int]]:
+def _partitions(
+    factory: bytes,
+) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int] | None]:
     ota_0: tuple[int, int] | None = None
     otadata: tuple[int, int] | None = None
+    nvs: tuple[int, int] | None = None
     offset = _PARTITION_TABLE_OFFSET
     while offset + _PARTITION_ENTRY.size <= len(factory):
-        magic, ptype, subtype, start, size, _, _ = _PARTITION_ENTRY.unpack_from(factory, offset)
+        magic, ptype, subtype, start, size, label, _ = _PARTITION_ENTRY.unpack_from(factory, offset)
         if magic != _PARTITION_MAGIC:
             break
         if ptype == _TYPE_APP and subtype == _SUBTYPE_OTA_0:
             ota_0 = (start, size)
         elif ptype == _TYPE_DATA and subtype == _SUBTYPE_OTADATA:
             otadata = (start, size)
+        elif (
+            ptype == _TYPE_DATA
+            and subtype == _SUBTYPE_NVS
+            and label.rstrip(b"\0").decode(errors="replace") == _NVS_LABEL
+        ):
+            nvs = (start, size)
         offset += _PARTITION_ENTRY.size
     if ota_0 is None or otadata is None:
         msg = "The OTA system's partition table has no ota_0 or no otadata partition"
         raise ValueError(msg)
-    return ota_0, otadata
+    return ota_0, otadata, nvs
 
 
 def _firmware_bin(storage_path: Path) -> Path:
@@ -620,7 +639,7 @@ def _serial_parts(
         return [(0, merged)]
     image = merged.read_bytes()
     system_bin = _firmware_bin(resolve_storage_path(system.configuration))
-    ota_0, otadata = _partitions((system_bin.parent / _FACTORY_FILENAME).read_bytes())
+    ota_0, otadata, _ = _partitions((system_bin.parent / _FACTORY_FILENAME).read_bytes())
     if write_system:
         part = merged.with_name(_SYSTEM_PART_FILENAME)
         part.write_bytes(image[: ota_0[0]])

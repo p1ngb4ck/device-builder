@@ -34,4 +34,5 @@ BUILD_FILES: tuple[str, ...] = (
     "build/bootloader/bootloader.bin",
     "build/partition_table/partition-table.bin",
     "build/ota_data_initial.bin",
+    "build/nvs.bin",
 )
