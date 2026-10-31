@@ -1,0 +1,473 @@
+id: esp32-s31-function-coreboard-1
+name: ESP32-S31-Function-CoreBoard-1
+description: Espressif ESP32-S31 development board with the ESP32-S31-WROOM-3 module (16 MB flash, 16 MB PSRAM). Wi-Fi 6,
+  Bluetooth Classic and LE, IEEE 802.15.4, Gigabit Ethernet (YT8531), USB 2.0 OTG High-Speed host port, ES8311 audio
+  codec with onboard microphone and NS4150B speaker amplifier, addressable RGB LED.
+manufacturer: Espressif
+esphome:
+  platform: esp32
+  board: esp32-s31-function-coreboard-1
+  variant: esp32s31
+  framework: esp-idf
+  logger_hardware_uart: USB_SERIAL_JTAG
+hardware:
+  flash_size: 16MB
+  cpu_frequency: 320MHz
+  connectivity:
+  - wifi
+  - bluetooth
+  - ethernet
+  - thread
+  - zigbee
+tags:
+- dev-kit
+- usb-c
+- microphone
+docs_url: https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s31/esp32-s31-function-coreboard-1/user_guide.html
+featured_components:
+- id: module_psram
+  component_id: psram
+  fields:
+    mode:
+      value: octal
+      locked: true
+    speed: 250MHZ
+
+- id: onboard_ethernet
+  component_id: ethernet
+  name: Onboard Ethernet
+  description: Built-in YT8531 Gigabit Ethernet PHY (RGMII).
+  fields:
+    type:
+      value: YT8531
+      locked: true
+    mdc_pin:
+      value: GPIO5
+      locked: true
+    mdio_pin:
+      value: GPIO6
+      locked: true
+    power_pin:
+      value: GPIO7
+      locked: true
+    phy_addr:
+      value: 0
+      locked: true
+
+- id: onboard_rgb_led
+  name: Onboard RGB LED
+  component_id: light.esp32_rmt_led_strip
+  fields:
+    id: onboard_rgb_led
+    name: Onboard RGB LED
+    pin:
+      value:
+        number: GPIO60
+        ignore_strapping_warning: true
+      locked: true
+    num_leds:
+      value: 1
+      locked: true
+    chipset:
+      value: WS2812
+      locked: true
+    channel_colors:
+      value: GRB
+      locked: true
+
+- id: boot_button
+  name: BOOT Button
+  component_id: binary_sensor.gpio
+  fields:
+    name: BOOT Button
+    pin:
+      value:
+        number: GPIO61
+        inverted: true
+        mode:
+          input: true
+          pullup: true
+        ignore_strapping_warning: true
+      locked: true
+    id: boot_button
+
+- id: i2c_bus
+  name: Onboard I²C bus
+  description: I²C bus of the ES8311 audio codec.
+  component_id: i2c
+  fields:
+    id:
+      value: i2c_bus
+      locked: true
+    sda:
+      value: GPIO51
+      locked: true
+    scl:
+      value: GPIO50
+      locked: true
+    frequency: 400kHz
+
+- id: audio_bus
+  component_id: i2s_audio
+  fields:
+    id:
+      value: audio_bus
+      locked: true
+    i2s_mclk_pin:
+      value: GPIO52
+      locked: true
+    i2s_bclk_pin:
+      value: GPIO53
+      locked: true
+    i2s_lrclk_pin:
+      value: GPIO55
+      locked: true
+
+- id: es8311_dac
+  component_id: audio_dac.es8311
+  fields:
+    id:
+      value: es8311_dac
+      locked: true
+    use_mclk:
+      value: true
+      locked: true
+    use_microphone:
+      value: false
+      locked: true
+    address:
+      value: 0x18
+      locked: true
+    i2c_id:
+      value: i2c_bus
+      locked: true
+    bits_per_sample: 16bit
+    sample_rate: 16000
+  requires: [i2c_bus]
+
+- id: audio_output
+  component_id: speaker.i2s_audio
+  fields:
+    id: audio_output
+    i2s_audio_id:
+      value: audio_bus
+      locked: true
+    i2s_dout_pin:
+      value: GPIO56
+      locked: true
+    audio_dac:
+      value: es8311_dac
+      locked: true
+    dac_type:
+      value: external
+      locked: true
+    bits_per_sample: 16bit
+    sample_rate: 16000
+  requires: [audio_bus, es8311_dac]
+
+- id: audio_input
+  component_id: microphone.i2s_audio
+  fields:
+    id: audio_input
+    adc_type:
+      value: external
+      locked: true
+    i2s_audio_id:
+      value: audio_bus
+      locked: true
+    i2s_din_pin:
+      value: GPIO54
+      locked: true
+    pdm:
+      value: false
+      locked: true
+    bits_per_sample: 16bit
+    sample_rate: 16000
+  requires: [audio_bus, es8311_dac]
+
+- id: audio_amplifier
+  name: Audio Amplifier Switch
+  component_id: switch.gpio
+  fields:
+    name: Audio Amplifier
+    id: audio_amplifier
+    icon: mdi:volume-high
+    restore_mode: ALWAYS_ON
+    pin:
+      value: GPIO57
+      locked: true
+
+default_components:
+- module_psram
+
+featured_bundles:
+- id: audio_setup
+  name: Audio Input/Output (full setup)
+  description: ES8311 codec with the onboard microphone and the speaker port, plus a switch for the NS4150B amplifier.
+  component_ids:
+  - i2c_bus
+  - audio_bus
+  - es8311_dac
+  - audio_output
+  - audio_input
+  - audio_amplifier
+
+pins:
+- gpio: 0
+  label: GPIO0
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 9
+- gpio: 1
+  label: GPIO1
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 12
+- gpio: 2
+  label: GPIO2
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 7
+- gpio: 3
+  label: GPIO3
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 10
+- gpio: 4
+  label: GPIO4
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 32
+- gpio: 5
+  available: false
+  occupied_by: Ethernet PHY (MDC)
+- gpio: 6
+  available: false
+  occupied_by: Ethernet PHY (MDIO)
+- gpio: 7
+  available: false
+  occupied_by: Ethernet PHY (Reset)
+- gpio: 8
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII TXD0
+- gpio: 9
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII TXD1
+- gpio: 10
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII TXD2
+- gpio: 11
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII TXD3
+- gpio: 12
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII TX_CTL
+- gpio: 13
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII TX clock
+- gpio: 14
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII RX clock
+- gpio: 15
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII RX_CTL
+- gpio: 16
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII RXD3
+- gpio: 17
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII RXD2
+- gpio: 18
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII RXD1
+- gpio: 19
+  available: false
+  occupied_by: Ethernet PHY
+  notes: RGMII RXD0
+- gpio: 20
+  label: GPIO20
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 26 (SDIO_DATA0)
+- gpio: 21
+  label: GPIO21
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 27 (SDIO_DATA1)
+- gpio: 22
+  label: GPIO22
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 28 (SDIO_DATA2)
+- gpio: 23
+  label: GPIO23
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 29 (SDIO_DATA3)
+- gpio: 24
+  label: GPIO24
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 30 (SDIO_CLK)
+- gpio: 25
+  label: GPIO25
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 31 (SDIO_CMD)
+- gpio: 26
+  available: false
+  occupied_by: SPI Flash
+  notes: SPI Flash — do not use
+- gpio: 27
+  available: false
+  occupied_by: SPI Flash
+  notes: SPI Flash — do not use
+- gpio: 28
+  available: false
+  occupied_by: SPI Flash
+  notes: SPI Flash — do not use
+- gpio: 30
+  available: false
+  occupied_by: SPI Flash
+  notes: SPI Flash — do not use
+- gpio: 31
+  available: false
+  occupied_by: SPI Flash
+  notes: SPI Flash — do not use
+- gpio: 32
+  available: false
+  occupied_by: SPI Flash
+  notes: SPI Flash — do not use
+- gpio: 33
+  available: false
+  occupied_by: USB Serial/JTAG
+- gpio: 34
+  available: false
+  occupied_by: USB Serial/JTAG
+- gpio: 35
+  label: GPIO35
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 25
+- gpio: 36
+  label: GPIO36
+  features: [pwm, strapping]
+  available: null
+  notes: Header J2 pin 24 — strapping pin (VDD_SPI voltage)
+- gpio: 37
+  label: GPIO37
+  features: [pwm, strapping]
+  available: null
+  notes: Header J2 pin 23 — strapping pin (JTAG signal source)
+- gpio: 38
+  label: GPIO38
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 22
+- gpio: 39
+  label: GPIO39
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 21
+- gpio: 40
+  label: GPIO40
+  features: [pwm]
+  available: null
+  notes: Header J2 pin 19
+- gpio: 42
+  label: GPIO42
+  features: [adc, pwm]
+  available: null
+  notes: Header J2 pin 20 — ADC1
+- gpio: 43
+  label: GPIO43
+  features: [adc, pwm]
+  available: null
+  notes: Header J2 pin 17 — ADC1
+- gpio: 44
+  label: GPIO44
+  features: [adc, pwm]
+  available: null
+  notes: Header J2 pin 18 — ADC1
+- gpio: 45
+  label: GPIO45
+  features: [adc, pwm]
+  available: null
+  notes: Header J2 pin 15 — ADC1
+- gpio: 46
+  label: GPIO46
+  features: [adc, pwm]
+  available: null
+  notes: Header J2 pin 16 — ADC1
+- gpio: 47
+  label: GPIO47
+  features: [adc, pwm]
+  available: null
+  notes: Header J2 pin 13 — ADC1
+- gpio: 48
+  label: GPIO48
+  features: [adc, pwm]
+  available: null
+  notes: Header J2 pin 14 — ADC1
+- gpio: 49
+  label: GPIO49
+  features: [adc, pwm]
+  available: null
+  notes: Header J2 pin 11 — ADC1
+- gpio: 50
+  available: false
+  occupied_by: Audio codec (I²C SCL)
+- gpio: 51
+  available: false
+  occupied_by: Audio codec (I²C SDA)
+- gpio: 52
+  available: false
+  occupied_by: Audio codec (I2S MCLK)
+- gpio: 53
+  available: false
+  occupied_by: Audio codec (I2S BCLK)
+- gpio: 54
+  available: false
+  occupied_by: Audio codec (I2S DIN)
+- gpio: 55
+  available: false
+  occupied_by: Audio codec (I2S LRCLK)
+- gpio: 56
+  available: false
+  occupied_by: Audio codec (I2S DOUT)
+- gpio: 57
+  available: false
+  occupied_by: Audio amplifier control
+- gpio: 58
+  label: GPIO58
+  features: [uart_tx]
+  available: null
+  notes: Header J2 pin 3 — UART0 TX (USB-to-UART bridge)
+- gpio: 59
+  label: GPIO59
+  features: [uart_rx]
+  available: null
+  notes: Header J2 pin 4 — UART0 RX (USB-to-UART bridge)
+- gpio: 60
+  label: GPIO60
+  features: [rgb_led, strapping]
+  available: false
+  occupied_by: Onboard RGB LED
+  notes: Header J2 pin 6 — strapping pin (boot mode), drives the WS2812
+- gpio: 61
+  label: GPIO61
+  features: [boot_button, strapping]
+  available: false
+  occupied_by: Boot Button
+  notes: Header J2 pin 5 — strapping pin (boot mode)
