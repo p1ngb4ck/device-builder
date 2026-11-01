@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from esphome.const import __version__ as _offloader_esphome_version
 
+from ...helpers import private_sources
 from ...helpers.api import CommandError
 from ...helpers.async_ import run_in_executor
 from ...helpers.config_bundle import BundleBuildError
@@ -176,6 +177,10 @@ async def run_remote_job(  # noqa: C901
     ``RENAME`` is rejected at the top because the receiver-side
     contract doesn't carry a wire shape for it.
     """
+    if job.configuration:
+        await private_sources.sync_for(
+            await run_in_executor(controller._db.settings.rel_path, job.configuration)
+        )
     if job.job_type not in (
         JobType.COMPILE,
         JobType.UPLOAD,
