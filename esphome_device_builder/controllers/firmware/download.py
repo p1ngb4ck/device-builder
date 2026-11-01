@@ -77,6 +77,7 @@ _platform_sets()
 # bootloader, so it has a UF2 and this update image; ``get_download_types``
 # lists the image only for a build with no UF2.
 _MCUBOOT_UPDATE_IMAGE = "zephyr/app_update.bin"
+_PACKAGES_DIR = "packages"
 
 
 def _helper_cmd() -> tuple[str, ...]:
@@ -170,6 +171,23 @@ def collect_download_entries(
                 "file": _MCUBOOT_UPDATE_IMAGE,
             }
         )
+    for package in sorted((build_dir / _PACKAGES_DIR).glob("*.so")):
+        manifest = package.with_suffix(".json")
+        downloads.append(
+            {
+                "title": f"Package {package.stem}",
+                "description": "Loadable package for the package manager.",
+                "file": f"{_PACKAGES_DIR}/{package.name}",
+            }
+        )
+        if manifest.is_file():
+            downloads.append(
+                {
+                    "title": f"Package {package.stem} manifest",
+                    "description": "Name and ABI id of the package.",
+                    "file": f"{_PACKAGES_DIR}/{manifest.name}",
+                }
+            )
     for entry in downloads:
         artifact_type = _ARTIFACT_TYPES.get(entry["file"])
         if artifact_type:
