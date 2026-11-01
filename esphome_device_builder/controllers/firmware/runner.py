@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...controllers.remote_build.env_provisioner import EnvProvisionError
 from ...helpers.ansi import ANSI_CSI_RE
+from ...helpers import private_sources
 from ...helpers.async_ import run_in_executor
 from ...helpers.subprocess import create_subprocess_exec
 from ...models import (
@@ -97,6 +98,9 @@ async def execute_job(  # noqa: PLR0915, PLR0912, C901
     await lifecycle.begin_run(controller, job)
 
     try:
+        await private_sources.sync_for(
+            await run_in_executor(controller._db.settings.rel_path, job.configuration)
+        )
         # Source-routed branch: REMOTE-source jobs dispatch via
         # peer-link to a paired receiver instead of running a
         # local subprocess. The receiver's ``OFFLOADER_JOB_*``

@@ -18,6 +18,8 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
+from . import private_sources
+
 # 4 KB is a reasonable chunk size — large enough to amortise the
 # syscall overhead on a busy pipe, small enough that latency-
 # sensitive consumers (live progress bars) see updates quickly.
@@ -43,6 +45,9 @@ async def create_subprocess_exec(
     ``asyncio.create_subprocess_exec`` directly.
     """
     kwargs["close_fds"] = False
+    env = private_sources.apply_to(kwargs.get("env"))
+    if env is not None:
+        kwargs["env"] = env
     proc = await asyncio.create_subprocess_exec(*args, **kwargs)
     _purge_reaped_children()
     _live_children.add(proc)
