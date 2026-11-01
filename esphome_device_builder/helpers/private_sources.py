@@ -103,9 +103,43 @@ def _plan(config_path: Path) -> tuple[Path, dict[str, str], dict[str, set[str]]]
     return mirror_dir, repos, _referenced(config_path, repos) if repos else {}
 
 
+def _base() -> tuple[Path, str] | None:
+    try:
+        data = json.loads(_settings_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    base = data.get("base")
+    if not isinstance(base, dict) or not base.get("path"):
+        return None
+    return Path(os.path.expanduser(base["path"])), base.get("branch") or "testing_dev"
+
+
+async def sync_base() -> None:
+    from .async_ import run_in_executor
+
+    base = await run_in_executor(_base)
+    if base is None:
+        return
+    path, branch = base
+    code, out = await _git("-C", str(path), "fetch", "-q", "origin", branch)
+    if code:
+        _LOGGER.error("Build base %s: fetch failed: %s", path, out)
+        return
+    _, head = await _git("-C", str(path), "rev-parse", "HEAD")
+    _, latest = await _git("-C", str(path), "rev-parse", f"origin/{branch}")
+    if head == latest:
+        return
+    code, out = await _git("-C", str(path), "checkout", "-q", "-f", "-B", branch, f"origin/{branch}")
+    if code:
+        _LOGGER.error("Build base %s: update failed: %s", path, out)
+    else:
+        _LOGGER.info("Build base %s updated to %s", path, latest[:10])
+
+
 async def sync_for(config_path: str | Path) -> None:
     from .async_ import run_in_executor
 
+    await sync_base()
     mirror_dir, repos, referenced = await run_in_executor(_plan, Path(config_path))
     for repo, refs in referenced.items():
         mirror = _mirror(mirror_dir, repo)
