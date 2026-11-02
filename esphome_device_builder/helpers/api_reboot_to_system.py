@@ -72,6 +72,8 @@ async def _query(request: dict[str, Any]) -> dict[str, Any]:
                     if isinstance(answer.get(key), str):
                         result[key] = answer[key]
                 result["self_update"] = answer.get("self_update") is True
+                if isinstance(answer.get("partitions"), list):
+                    result["partitions"] = answer["partitions"]
         return result
     finally:
         await client.disconnect(force=True)

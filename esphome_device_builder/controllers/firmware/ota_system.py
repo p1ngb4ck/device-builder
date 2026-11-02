@@ -45,6 +45,7 @@ _SUBTYPE_OTA_0 = 0x10
 _SUBTYPE_OTADATA = 0x00
 _SUBTYPE_NVS = 0x02
 _NVS_LABEL = "nvs"
+_MAIN_LABELS = ("main", "app")
 _NVS_IMAGE_FILENAME = "nvs.bin"
 _OTADATA_SEQ = struct.Struct("<I")
 _OTADATA_CRC_OFFSET = 28
@@ -61,6 +62,7 @@ _SYSTEM_CHANGED_WARNINGS = (
     "WARNING The OTA system changed, and the OTA system on the device cannot update itself.",
     "WARNING Flash the device via serial once: the full image with both systems.",
 )
+_TABLE_CHANGED_INFO = "INFO The partition table changed: the OTA system writes the new one first"
 _UNCHANGED_FLASH_MAIN = "INFO Both systems are unchanged on the device: the main firmware is flashed"
 _SYSTEM_PART_FILENAME = "firmware.ota_system.part.bin"
 _OTADATA_PART_FILENAME = "firmware.otadata.bin"
@@ -79,6 +81,15 @@ RunStep = Callable[..., Awaitable[tuple[int, bool, bool]]]
 @dataclass(frozen=True)
 class OtaSystem:
     configuration: str
+
+
+@dataclass(frozen=True, order=True)
+class Partition:
+    label: str
+    ptype: int
+    subtype: int
+    offset: int
+    size: int
 
 
 def system_configuration(configuration: str) -> str:
@@ -292,6 +303,19 @@ async def _ota_upload(
             _emit(controller, job, _SYSTEM_NOT_UP_ERROR)
             return 1, False, False
         state = await _system_worker(controller, job, mode="query")
+    if await run_in_executor(_table_changed, state.get("partitions"), system):
+        _emit(controller, job, _TABLE_CHANGED_INFO)
+        result = await run(system.configuration, job.port, partition_table=True)
+        if result[0] != 0 or result[1]:
+            return result
+        waited = await _system_worker(
+            controller, job, mode="wait", expect_elf=str(state.get("elf_sha256") or "")
+        )
+        if waited.get("outcome") != "in_system":
+            _emit(controller, job, _SYSTEM_NOT_UP_ERROR)
+            return 1, False, False
+        state = await _system_worker(controller, job, mode="query")
+        main_changed = True
     if system_changed:
         if not state.get("self_update"):
             for line in _SYSTEM_CHANGED_WARNINGS:
@@ -395,32 +419,59 @@ def build_factory_image(configuration: str, system: OtaSystem) -> Path:
     return target
 
 
+def _table_entries(data: bytes, offset: int = _PARTITION_TABLE_OFFSET) -> list[Partition]:
+    entries: list[Partition] = []
+    while offset + _PARTITION_ENTRY.size <= len(data):
+        magic, ptype, subtype, start, size, label, _ = _PARTITION_ENTRY.unpack_from(data, offset)
+        if magic != _PARTITION_MAGIC:
+            break
+        entries.append(Partition(label.rstrip(b"\0").decode(errors="replace"), ptype, subtype, start, size))
+        offset += _PARTITION_ENTRY.size
+    return entries
+
+
+def _partition(
+    entries: list[Partition], ptype: int, subtype: int, labels: tuple[str, ...] = ()
+) -> tuple[int, int] | None:
+    for label in labels:
+        for entry in entries:
+            if entry.label == label and entry.ptype == ptype and entry.subtype == subtype:
+                return entry.offset, entry.size
+    matches = [e for e in entries if e.ptype == ptype and e.subtype == subtype]
+    if len(matches) > 1:
+        names = ", ".join(e.label for e in matches)
+        msg = f"Several partitions of type {ptype} subtype 0x{subtype:X} ({names}): name one by label"
+        raise ValueError(msg)
+    return (matches[0].offset, matches[0].size) if matches else None
+
+
 def _partitions(
     factory: bytes,
 ) -> tuple[tuple[int, int], tuple[int, int], tuple[int, int] | None]:
-    ota_0: tuple[int, int] | None = None
-    otadata: tuple[int, int] | None = None
-    nvs: tuple[int, int] | None = None
-    offset = _PARTITION_TABLE_OFFSET
-    while offset + _PARTITION_ENTRY.size <= len(factory):
-        magic, ptype, subtype, start, size, label, _ = _PARTITION_ENTRY.unpack_from(factory, offset)
-        if magic != _PARTITION_MAGIC:
-            break
-        if ptype == _TYPE_APP and subtype == _SUBTYPE_OTA_0:
-            ota_0 = (start, size)
-        elif ptype == _TYPE_DATA and subtype == _SUBTYPE_OTADATA:
-            otadata = (start, size)
-        elif (
-            ptype == _TYPE_DATA
-            and subtype == _SUBTYPE_NVS
-            and label.rstrip(b"\0").decode(errors="replace") == _NVS_LABEL
-        ):
-            nvs = (start, size)
-        offset += _PARTITION_ENTRY.size
+    entries = _table_entries(factory)
+    ota_0 = _partition(entries, _TYPE_APP, _SUBTYPE_OTA_0, _MAIN_LABELS)
+    otadata = _partition(entries, _TYPE_DATA, _SUBTYPE_OTADATA)
+    nvs = _partition(entries, _TYPE_DATA, _SUBTYPE_NVS, (_NVS_LABEL,))
     if ota_0 is None or otadata is None:
         msg = "The OTA system's partition table has no ota_0 or no otadata partition"
         raise ValueError(msg)
     return ota_0, otadata, nvs
+
+
+def _built_table(system: OtaSystem) -> list[Partition]:
+    system_bin = _firmware_bin(resolve_storage_path(system.configuration))
+    return _table_entries((system_bin.parent / _FACTORY_FILENAME).read_bytes())
+
+
+def _table_changed(device: Any, system: OtaSystem) -> bool:
+    built = sorted(_built_table(system))
+    if not isinstance(device, list):
+        return True
+    try:
+        reported = sorted(Partition(str(e[0]), int(e[1]), int(e[2]), int(e[3]), int(e[4])) for e in device)
+    except (TypeError, ValueError, IndexError):
+        return True
+    return reported != built
 
 
 def _firmware_bin(storage_path: Path) -> Path:
