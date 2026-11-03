@@ -103,6 +103,15 @@ def secret_key(text: str) -> tuple[bytes, bytes]:
     return keynum, seckey[:32]
 
 
+def public_key_file(key_text: str) -> bytes:
+    raw = usign_line(key_text)
+    secret_key(key_text)
+    keynum = raw[32:40]
+    public = raw[72:104]
+    line = base64.b64encode(b"Ed" + keynum + public).decode("ascii")
+    return f"untrusted comment: esphome-packages public key {keynum.hex()}\n{line}\n".encode("ascii")
+
+
 def sign(index: bytes, key_text: str) -> bytes:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -167,6 +176,7 @@ def publish(ipks: list[Path], repo: Path, board: str, device: str, version: str,
         out.write(index)
     if key_text.strip():
         (target / "Packages.sig").write_bytes(sign(index, key_text))
+        (repo / "signing.pub").write_bytes(public_key_file(key_text))
     catalog_path = repo / "index.json"
     catalog = json.loads(catalog_path.read_text(encoding="utf-8")) if catalog_path.is_file() else {"builds": []}
     builds = [build for build in catalog.get("builds", []) if build.get("id") != firmware_id]
