@@ -23,11 +23,13 @@ from typing import TYPE_CHECKING, Any
 from esphome.const import __version__ as _installed_esphome_version
 
 from ...controllers.remote_build.env_provisioner import EnvProvisionError
+from ...helpers import package_publish
 from ...helpers.api import CommandError, api_command
 from ...helpers.async_ import create_eager_task, drain_tasks, run_in_executor
 from ...helpers.device_yaml import configuration_filename
 from ...helpers.event_bus import Event
 from ...helpers.sibling_cli import find_esphome_cmd
+from ...helpers.storage_path import resolve_storage_path
 from ...models import (
     COMPILING_JOB_TYPES,
     LOCAL_JOB_BUILD_SOURCE,
@@ -93,6 +95,8 @@ class FirmwareController:  # noqa: PLR0904 (grandfathered; new public methods ne
         # overtaken by a newer one (which would let a stale snapshot
         # overwrite fresher state on disk).
         self._persist_lock = asyncio.Lock()
+        self._publish_lock = asyncio.Lock()
+        self._publish_tasks: set[asyncio.Task] = set()
 
         self._unsub_device_wake = self.bus.add_listener(
             EventType.DEVICE_STATE_CHANGED, self._handle_device_wake
@@ -541,6 +545,23 @@ class FirmwareController:  # noqa: PLR0904 (grandfathered; new public methods ne
         self._arm_queued_update_if_flagged(job)
         self._handle_deferred_compile_completion(job)
         self._handle_ota_upload_completion(job)
+        self._publish_packages(job)
+
+    def _publish_packages(self, job: FirmwareJob) -> None:
+        if job.job_type not in (JobType.COMPILE, JobType.INSTALL) or not package_publish.enabled():
+            return
+        task = create_eager_task(self._publish_packages_of(job.configuration))
+        self._publish_tasks.add(task)
+        task.add_done_callback(self._publish_tasks.discard)
+
+    async def _publish_packages_of(self, configuration: str) -> None:
+        async with self._publish_lock:
+            try:
+                storage = resolve_storage_path(configuration)
+                if storage.is_file():
+                    await run_in_executor(package_publish.publish_storage, storage)
+            except package_publish.PUBLISH_ERRORS as err:
+                _LOGGER.warning("Publishing the packages of %s failed: %s", configuration, err)
 
     def _handle_job_failed(self, event: Event) -> None:
         """Arm the queued update for an OTA app upload that failed against an offline device."""
