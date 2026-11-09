@@ -198,11 +198,12 @@ def publish(ipks: list[Path], repo: Path, board: str, device: str, version: str,
 
 
 def build_packages(build_path: Path) -> list[Path]:
-    main = build_path / "src" / "main.cpp"
     folder = build_path / "build" / "packages"
-    if not main.is_file() or not folder.is_dir():
+    if not folder.is_dir():
         return []
-    match = FIRMWARE_ID.search(main.read_text(encoding="utf-8", errors="replace"))
+    sources = [build_path / "src" / "main.cpp", *sorted((build_path / "component_libs").glob("*abi*"))]
+    texts = (source.read_text(encoding="utf-8", errors="replace") for source in sources if source.is_file())
+    match = next((found for found in map(FIRMWARE_ID.search, texts) if found is not None), None)
     if match is None:
         return []
     wanted = match.group(1)
