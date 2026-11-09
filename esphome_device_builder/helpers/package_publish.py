@@ -33,6 +33,7 @@ FIELDS = (
     "Version",
     "Depends",
     "Architecture",
+    "Section",
     "ESPHome-ABI",
     "ESPHome-Flash",
     "ESPHome-PSRAM",
