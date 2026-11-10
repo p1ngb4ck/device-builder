@@ -38,6 +38,7 @@ FIELDS = (
     "ESPHome-Flash",
     "ESPHome-PSRAM",
     "ESPHome-IRAM",
+    "ESPHome-Features",
     "Description",
 )
 
