@@ -111,7 +111,7 @@ def _base() -> tuple[Path, str] | None:
     base = data.get("base")
     if not isinstance(base, dict) or not base.get("path"):
         return None
-    return Path(os.path.expanduser(base["path"])), base.get("branch") or "testing_dev"
+    return Path(os.path.expanduser(base["path"])), base.get("branch") or "dev"
 
 
 async def sync_base() -> None:
